@@ -16,23 +16,20 @@ from __future__ import annotations
 
 import functools
 import io
+import itertools
+import math
 import mimetypes
+import os
+import signal
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 MAX_BYTES = 50 * 1024 * 1024  # 50 MB
-
-
-def free_name(folder: Path, stem: str, ext: str) -> Path:
-    """folder/stem.ext, or stem-1.ext, stem-2.ext ... if that name is taken."""
-    out = folder / f"{stem}.{ext}"
-    i = 1
-    while out.exists():
-        out = folder / f"{stem}-{i}.{ext}"
-        i += 1
-    return out
+MAX_PIXELS = 100_000_000      # largest image we decode (about 400 MB as RGBA)
+MAX_RENDER_PIXELS = 50_000_000  # largest PDF page we rasterise (dpi is lowered to fit)
+MAX_PDF_PAGES = 200           # pages turned into PNGs in one zip
 
 
 @dataclass
@@ -85,14 +82,22 @@ def pdf_to_txt(data: bytes) -> bytes:
         doc.close()
 
 
+def _render_page(page) -> bytes:
+    """Page as PNG at 150 dpi, lowered for huge pages so the bitmap stays under MAX_RENDER_PIXELS."""
+    dpi = 150
+    area = page.rect.width * page.rect.height * (dpi / 72) ** 2
+    if area > MAX_RENDER_PIXELS:
+        dpi = max(10, int(dpi * math.sqrt(MAX_RENDER_PIXELS / area)))
+    return page.get_pixmap(dpi=dpi).tobytes("png")
+
+
 @register("pdf", "png", "image/png")
 def pdf_to_png(data: bytes) -> bytes:
     import pymupdf
 
     doc = pymupdf.open(stream=data, filetype="pdf")
     try:
-        pix = doc[0].get_pixmap(dpi=150)
-        return pix.tobytes("png")
+        return _render_page(doc[0])
     finally:
         doc.close()
 
@@ -106,10 +111,14 @@ def pdf_to_zip(data: bytes) -> bytes:
 
     doc = pymupdf.open(stream=data, filetype="pdf")
     try:
+        if len(doc) > MAX_PDF_PAGES:
+            raise ValueError(f"the PDF has {len(doc)} pages; the limit is {MAX_PDF_PAGES}")
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:  # PNGs are already compressed
             for i, page in enumerate(doc, start=1):
-                z.writestr(f"page-{i:03d}.png", page.get_pixmap(dpi=150).tobytes("png"))
+                z.writestr(f"page-{i:03d}.png", _render_page(page))
+                if buf.tell() > MAX_BYTES:
+                    raise ValueError(f"the zip would be over the {MAX_BYTES >> 20} MB limit (stopped at page {i} of {len(doc)})")
         return buf.getvalue()
     finally:
         doc.close()
@@ -132,13 +141,18 @@ def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
             *(["--infilter=HTML (StarWriter)"] if src_ext == "html" else []),
             "--convert-to", dst_ext, "--outdir", td, str(src),
         ]
+        # own process group, so a timeout can kill soffice.bin and not just the launcher
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=LO_TIMEOUT)
+            stdout, stderr = proc.communicate(timeout=LO_TIMEOUT)
         except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
             raise RuntimeError("LibreOffice conversion timed out")
         out = Path(td) / f"input.{dst_ext}"
         if not out.exists():
-            err = (proc.stdout + proc.stderr).decode(errors="replace").strip()
+            err = (stdout + stderr).decode(errors="replace").strip()
             raise RuntimeError(err or "LibreOffice produced no output")
         return out.read_bytes()
 
@@ -183,19 +197,32 @@ IMAGE_SOURCES = {
 
 
 def _open_image(data: bytes):
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image, ImageOps, UnidentifiedImageError
     from pillow_heif import register_heif_opener
 
     register_heif_opener()  # lets Image.open read .heic/.heif (idempotent)
-    Image.MAX_IMAGE_PIXELS = 200_000_000  # decompression-bomb guard
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     try:
-        return Image.open(io.BytesIO(data))
+        im = Image.open(io.BytesIO(data))  # lazy: reads the header only
     except UnidentifiedImageError:
         raise ValueError("cannot read this image") from None
+    except Image.DecompressionBombError:  # Pillow's own refusal, above twice the limit
+        raise ValueError(f"the image is too large; the limit is {MAX_PIXELS // 1_000_000} megapixels") from None
+    # Pillow only raises above twice MAX_IMAGE_PIXELS, so check the size ourselves
+    if im.width * im.height > MAX_PIXELS:
+        raise ValueError(f"the image is {im.width}x{im.height}; the limit is {MAX_PIXELS // 1_000_000} megapixels")
+    return ImageOps.exif_transpose(im)  # phone photos store "rotate me" in EXIF
 
 
 def image_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
     im = _open_image(data)
+    if im.mode in ("I", "I;16", "I;16L", "I;16B", "F"):
+        if dst_ext not in ("png", "tiff"):  # 8-bit formats: scale 16-bit down, not clip
+            im = im.convert("I").point(lambda v: v / 256).convert("L") if im.mode != "F" else im.convert("L")
+    elif im.mode not in ("RGB", "RGBA", "L", "LA", "P", "1"):
+        im = im.convert("RGB")  # CMYK, YCbCr, LAB, HSV...: no target but TIFF/JPEG holds them
+    if im.mode == "LA" and dst_ext in ("bmp", "gif"):
+        im = im.convert("RGBA")  # these cannot store gray+alpha
     if dst_ext == "jpg":
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")  # flatten alpha/palette for JPEG
@@ -317,6 +344,8 @@ def run_chain(data: bytes, route: Route) -> bytes:
             if len(route) == 1:
                 raise
             raise RuntimeError(f"{src}->{dst} failed (step {step} of {len(route)}): {exc}") from exc
+    if len(data) > MAX_BYTES:
+        raise ValueError(f"the result is over the {MAX_BYTES >> 20} MB limit")
     text_like = route[-1][1] in TEXT_TARGETS
     if not (data.strip() if text_like else data):
         raise ValueError("the result is empty (the source has nothing to convert to this format)")
@@ -344,10 +373,27 @@ def convert_path(path: Path, fmt: str) -> tuple[bytes, Route]:
 
 
 def save_output(folder: Path, stem: str, fmt: str, data: bytes) -> Path:
-    """Write folder/stem.fmt without overwriting anything (stem-1.fmt if taken)."""
+    """Write folder/stem.fmt without overwriting anything (stem-1.fmt if taken).
+
+    The data goes to a private temp file first, then a hard link claims the final
+    name: it appears complete or not at all, and a name taken meanwhile is skipped.
+    """
     folder.mkdir(parents=True, exist_ok=True)
-    out = free_name(folder, stem, fmt)
-    tmp = out.with_name(f".{out.name}.tmp")
-    tmp.write_bytes(data)
-    tmp.rename(out)  # appears complete or not at all
-    return out
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".fileforge-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o644)
+        for i in itertools.count():
+            out = folder / (f"{stem}.{fmt}" if i == 0 else f"{stem}-{i}.{fmt}")
+            try:
+                os.link(tmp, out)
+                return out
+            except FileExistsError:
+                continue
+            except OSError:  # file system without hard links (FAT, some network shares)
+                if not out.exists():
+                    os.rename(tmp, out)
+                    return out
+    finally:
+        Path(tmp).unlink(missing_ok=True)

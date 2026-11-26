@@ -31,7 +31,8 @@ LOG_NAME = "watcher.jsonl"
 
 def ignored(p: Path) -> bool:
     n = p.name
-    return n.startswith(".") or n.endswith("~") or p.suffix.lower() in SKIP_SUFFIXES
+    # symlinks are skipped: a link planted in a folder must not make us read the file it points at
+    return n.startswith(".") or n.endswith("~") or p.suffix.lower() in SKIP_SUFFIXES or p.is_symlink()
 
 
 def notify(title: str, body: str) -> None:
@@ -69,6 +70,7 @@ class Watcher:
         self.seen: dict[Path, tuple[int, int]] = {}   # path -> (size, mtime_ns) at last poll
         self.done: set[tuple[str, int, int]] = set()  # converted: never redone
         self.failed: set[tuple[str, int, int]] = set()  # failed: retried when its .err is deleted
+        self.broken: set[tuple[str, int, int]] = set()  # could not even record a failure: not retried this run
         self.log_path = root / LOG_NAME
         self._load_log(retry_failed)
 
@@ -112,7 +114,7 @@ class Watcher:
                 if self.seen.get(p) != sig:
                     continue  # new or still changing: wait one more poll
                 key = (str(p), *sig)
-                if key in self.done:
+                if key in self.done or key in self.broken:
                     continue
                 if key in self.failed:
                     if (p.parent / "failed" / f"{p.name}.err").exists():
@@ -125,17 +127,25 @@ class Watcher:
     def convert(self, p: Path, fmt: str, st) -> int:
         try:
             data, route = convert_path(p, fmt)
-        except Exception as exc:  # any converter failure must not stop the watcher
-            failed = p.parent / "failed"
-            failed.mkdir(exist_ok=True)
-            (failed / f"{p.name}.err").write_text(f"{exc}\n")
-            self._log(p, st, "failed", error=str(exc))
+            out = save_output(p.parent / "out", p.stem, fmt, data)
+        except Exception as exc:  # any failure, even an unwritable out/, must not stop the watcher
+            try:
+                failed = p.parent / "failed"
+                failed.mkdir(exist_ok=True)
+                (failed / f"{p.name}.err").write_text(f"{exc}\n")
+                self._log(p, st, "failed", error=str(exc))
+            except OSError as io_exc:  # cannot record it either (disk full, bad permissions)
+                self.broken.add((str(p), st.st_size, st.st_mtime_ns))
+                print(f"cannot record failure for {p.name}: {io_exc}", flush=True)
             notify(f"Could not convert {p.name}", str(exc))
             print(f"FAILED {p.name}: {exc}", flush=True)
             return 0
-        out = save_output(p.parent / "out", p.stem, fmt, data)
         steps = [route[0][0]] + [dst for _, dst in route]  # e.g. ["docx", "pdf", "png"]
-        self._log(p, st, "ok", output=str(out), **({"route": steps} if len(route) > 1 else {}))
+        try:
+            self._log(p, st, "ok", output=str(out), **({"route": steps} if len(route) > 1 else {}))
+        except OSError as exc:  # the file is converted; only the log line is missing
+            self.done.add((str(p), st.st_size, st.st_mtime_ns))
+            print(f"cannot write the log: {exc}", flush=True)
         notify(f"Converted {p.name}", f"Saved {out.name}")
         print(f"OK {p.name} -> {out}" + (f" (via {', '.join(steps[1:-1])})" if len(route) > 1 else ""), flush=True)
         return 1

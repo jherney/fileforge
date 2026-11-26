@@ -5,9 +5,9 @@ converters themselves live in converters.py.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -19,6 +19,8 @@ from converters import MAX_BYTES, REGISTRY, chained_pairs, content_type_for, fin
 
 PORT = 8420
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
+ALLOWED_ORIGINS = {f"http://{h}:{PORT}" for h in LOCAL_HOSTS}
+CONVERSION_SLOTS = asyncio.Semaphore(2)  # each conversion can use a lot of memory or a whole LibreOffice
 
 app = FastAPI(title="FileForge")
 # Only answer requests addressed to this machine (blocks DNS rebinding), and refuse
@@ -40,7 +42,7 @@ async def refuse_oversize_early(request, call_next):
 async def refuse_cross_site_writes(request, call_next):
     origin = request.headers.get("origin")
     if request.method not in ("GET", "HEAD", "OPTIONS") and origin is not None:
-        if urlparse(origin).hostname not in LOCAL_HOSTS:
+        if origin not in ALLOWED_ORIGINS:  # another local dev server (localhost:3000) is cross-site too
             return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
     return await call_next(request)
 
@@ -80,7 +82,8 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
         raise HTTPException(413, "File too large (50 MB limit)")
 
     try:
-        out = await run_in_threadpool(run_chain, data, route)
+        async with CONVERSION_SLOTS:
+            out = await run_in_threadpool(run_chain, data, route)
     except Exception as exc:  # converter failure -> 422 with a readable message
         raise HTTPException(422, f"Conversion failed: {exc}") from exc
 
