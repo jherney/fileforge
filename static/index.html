@@ -6,152 +6,134 @@
 <title>FileForge — Convert your files</title>
 <style>
   :root {
-    --bg: #0d1017;
-    --panel: #151a24;
-    --panel-2: #1b2130;
-    --line: #2a3245;
-    --text: #e8ecf4;
-    --muted: #8a94a8;
-    --accent: #5b8cff;
-    --accent-2: #7c5bff;
-    --ok: #3ecf8e;
-    --err: #ff6b6b;
-    --radius: 14px;
+    --bg: #16191b;
+    --panel: #1e2326;
+    --panel-2: #262d31;
+    --line: #343b3f;
+    --text: #e8e5dc;
+    --muted: #8f9a9c;
+    --accent: #5fc1ad;
+    --accent-ink: #0c1f1b;
+    --heat: #f0773c;
+    --err: #ff7a6b;
+    --radius: 6px;
+    --slab: Rockwell, "Roboto Slab", "Rockwell Nova", "Hoefler Text", Georgia, serif;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  :root { color-scheme: dark; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   body {
-    background: radial-gradient(1200px 700px at 80% -10%, #1c2440 0%, var(--bg) 55%);
-    color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    min-height: 100vh;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; padding: 40px 24px 56px;
     display: flex; flex-direction: column; align-items: center;
-    padding: 40px 20px 60px;
   }
-  header { text-align: center; margin-bottom: 34px; }
-  .logo {
-    font-size: 30px; font-weight: 800; letter-spacing: -0.5px;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-  }
-  .tagline { color: var(--muted); margin-top: 6px; }
-  main { width: 100%; max-width: 620px; }
+  header, main { width: 100%; max-width: 880px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 24px; flex-wrap: wrap; margin-bottom: 28px; }
+  .logo { font: 800 34px/1 var(--slab); letter-spacing: -.02em; }
+  .tagline { color: var(--muted); max-width: 34ch; text-align: right; }
 
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 22px;
-  }
+  .bays { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+  .in, .out { padding: 24px; position: relative; }
+  .out { border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 16px; }
+  .out::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, transparent, var(--heat), transparent); background-size: 40% 100%; background-repeat: no-repeat; background-position: -40% 0; opacity: 0; }
+  .bays:has(.spinner) .out::before { opacity: 1; animation: sweep 1.2s ease-in-out infinite; }
+  @keyframes sweep { to { background-position: 140% 0; } }
 
-  /* drop zone */
-  #drop {
-    border: 2px dashed var(--line);
-    border-radius: var(--radius);
-    padding: 46px 20px;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color .15s, background .15s;
-  }
-  #drop:hover, #drop.over { border-color: var(--accent); background: rgba(91,140,255,.06); }
-  #drop .big { font-size: 17px; font-weight: 600; }
-  #drop .small { color: var(--muted); margin-top: 6px; font-size: 13px; }
+  #drop { border: 2px dashed var(--line); border-radius: var(--radius); padding: 56px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: rgba(95,193,173,.07); }
+  #drop .big { font: 700 20px/1.25 var(--slab); }
+  #drop .small { color: var(--muted); margin-top: 8px; font-size: 13px; }
   #file { display: none; }
 
-  .filechip {
-    display: none; align-items: center; gap: 12px;
-    background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: 10px; padding: 12px 14px; margin-top: 16px;
-  }
+  .filechip { display: none; align-items: center; gap: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-top: 14px; }
   .filechip.show { display: flex; }
-  .filechip .ext {
-    font-weight: 800; font-size: 12px; letter-spacing: .5px;
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    border-radius: 8px; padding: 8px 9px; color: #fff; text-transform: uppercase;
-  }
+  .filechip .ext { font: 800 13px var(--slab); background: var(--accent); color: var(--accent-ink); border-radius: 4px; padding: 6px 8px; text-transform: lowercase; }
   .filechip .meta { flex: 1; min-width: 0; }
   .filechip .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .filechip .size { color: var(--muted); font-size: 12.5px; }
-  .filechip .x { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; padding: 4px 8px; }
+  .filechip .x { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 2px 8px; }
   .filechip .x:hover { color: var(--err); }
 
-  /* conversion row */
-  .convert-row { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .convert-row { display: grid; gap: 8px; }
+  .fmt-label { color: var(--muted); font-size: 13px; }
   .fmt {
-    flex: 1; background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
-    border-radius: 10px; padding: 12px 14px; font-size: 15px; font-weight: 600;
-    appearance: none; -webkit-appearance: none;
-    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="%238a94a8" stroke-width="2" fill="none" stroke-linecap="round"/></svg>');
+    width: 100%; background-color: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: var(--radius); padding: 11px 14px; font: 700 18px var(--slab);
+    appearance: none; -webkit-appearance: none; cursor: pointer;
+    background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="%238f9a9c" stroke-width="2" fill="none" stroke-linecap="round"/></svg>');
     background-repeat: no-repeat; background-position: right 14px center;
-    cursor: pointer;
   }
-  .arrow { color: var(--accent); font-size: 22px; flex: 0 0 auto; }
+  .arrow { color: var(--accent); font-size: 20px; line-height: 1; padding-left: 14px; }
 
-  button.go {
-    width: 100%; margin-top: 18px; padding: 14px;
-    font-size: 16px; font-weight: 700; color: #fff;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2));
-    border: none; border-radius: 10px; cursor: pointer;
-    transition: opacity .15s, transform .05s;
-  }
-  button.go:hover { opacity: .92; }
-  button.go:active { transform: scale(.995); }
-  button.go:disabled { opacity: .45; cursor: not-allowed; }
+  button.go { margin-top: auto; width: 100%; padding: 14px; font: 800 17px var(--slab); color: var(--accent-ink); background: var(--accent); border: none; border-radius: var(--radius); cursor: pointer; transition: filter .15s, transform .05s; }
+  button.go:hover { filter: brightness(1.08); }
+  button.go:active { transform: translateY(1px); }
+  button.go:disabled { background: var(--panel-2); color: var(--muted); cursor: not-allowed; }
 
-  .status { margin-top: 14px; min-height: 22px; font-size: 14px; text-align: center; }
+  .status { min-height: 22px; font-size: 14px; }
   .status.err { color: var(--err); }
-  .status.ok { color: var(--ok); }
-  .spinner {
-    display: inline-block; width: 14px; height: 14px; margin-right: 8px;
-    border: 2px solid rgba(255,255,255,.25); border-top-color: var(--accent);
-    border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .status.ok { color: var(--accent); }
+  .spinner { display: inline-block; width: 12px; height: 12px; margin-right: 8px; border-radius: 50%; background: var(--heat); animation: pulse .9s ease-in-out infinite alternate; vertical-align: -1px; }
+  @keyframes pulse { from { opacity: .35; } to { opacity: 1; } }
 
-  .available { margin-top: 22px; color: var(--muted); font-size: 13px; text-align: center; }
-  .available .pill {
-    display: inline-block; background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: 999px; padding: 3px 10px; margin: 3px; font-size: 12.5px; color: var(--text);
+  .available { margin-top: 28px; }
+  .available h2 { font: 700 16px var(--slab); margin-bottom: 10px; }
+  .rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0 32px; }
+  .row { display: flex; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+  .row b { flex: 0 0 52px; font: 800 13px var(--slab); color: var(--accent); }
+  .row span { color: var(--muted); }
+  footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 720px) {
+    body { padding: 28px 16px 40px; }
+    .tagline { text-align: left; }
+    .bays { grid-template-columns: minmax(0, 1fr); }
+    .out { border-left: none; border-top: 1px solid var(--line); }
+    #drop { padding: 36px 16px; }
   }
-  footer { margin-top: 26px; color: var(--muted); font-size: 12.5px; text-align: center; }
+  @media (prefers-reduced-motion: reduce) { .bays:has(.spinner) .out::before, .spinner { animation: none; } .bays:has(.spinner) .out::before { background-position: 50% 0; } }
 </style>
 </head>
 <body>
 <header>
   <div class="logo">FileForge</div>
-  <div class="tagline">Convert documents in your browser. Files never leave this machine.</div>
+  <div class="tagline">Convert documents on this machine. Nothing is uploaded.</div>
 </header>
 
 <main>
-  <div class="card">
-    <div id="drop" role="button" tabindex="0" aria-label="Choose a file to convert, or drop one here">
-      <div class="big">Drop a file here or click to browse</div>
-      <div class="small" id="dropHint">PDF up to 50&nbsp;MB</div>
-      <input type="file" id="file">
-    </div>
-
-    <div class="filechip" id="chip">
-      <div class="ext" id="chipExt">PDF</div>
-      <div class="meta">
-        <div class="name" id="chipName">document.pdf</div>
-        <div class="size" id="chipSize">—</div>
+  <div class="bays">
+    <section class="in">
+      <div id="drop" role="button" tabindex="0" aria-label="Choose a file to convert, or drop one here">
+        <div class="big">Drop a file here, or click to choose one</div>
+        <div class="small" id="dropHint">Up to 50&nbsp;MB</div>
+        <input type="file" id="file">
       </div>
-      <button class="x" id="chipX" title="Remove file" aria-label="Remove file">&times;</button>
-    </div>
+      <div class="filechip" id="chip">
+        <div class="ext" id="chipExt">pdf</div>
+        <div class="meta">
+          <div class="name" id="chipName">document.pdf</div>
+          <div class="size" id="chipSize">—</div>
+        </div>
+        <button class="x" id="chipX" title="Remove file" aria-label="Remove file">&times;</button>
+      </div>
+    </section>
 
-    <div class="convert-row">
-      <select class="fmt" id="fromSel" aria-label="Convert from"></select>
-      <div class="arrow">&#8594;</div>
-      <select class="fmt" id="toSel" aria-label="Convert to"></select>
-    </div>
-
-    <button class="go" id="go" disabled>Convert</button>
-    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <section class="out">
+      <div class="convert-row">
+        <label class="fmt-label" for="fromSel">From</label>
+        <select class="fmt" id="fromSel"></select>
+        <div class="arrow" aria-hidden="true">&#8595;</div>
+        <label class="fmt-label" for="toSel">To</label>
+        <select class="fmt" id="toSel"></select>
+      </div>
+      <button class="go" id="go" disabled>Convert</button>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+    </section>
   </div>
 
-  <div class="available" id="available"></div>
-  <footer>Runs locally · nothing is uploaded to the internet</footer>
+  <section class="available" id="available"></section>
+  <footer>Runs locally. Files never leave this machine.</footer>
 </main>
 
 <script src="app.js"></script>

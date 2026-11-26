@@ -93,17 +93,21 @@ function setFile(f) {
 
 function renderAvailable() {
   const el = $("available");
-  el.innerHTML = "<div style='margin-bottom:8px'>Supported conversions</div>";
+  el.innerHTML = "<h2>Supported conversions</h2>";
+  const rows = document.createElement("div");
+  rows.className = "rows";
   for (const src of Object.keys(SOURCES).sort()) {
     if (src === "jpeg") continue; // shown as JPG
-    const pill = document.createElement("span");
-    pill.className = "pill";
+    const row = document.createElement("div");
+    row.className = "row";
     const targets = [...new Set(SOURCES[src])];
-    pill.innerHTML = `<b>${src.toUpperCase()}</b> → ${targets.map((t) => t.toUpperCase()).join(" · ")}`;
-    el.appendChild(pill);
+    const b = document.createElement("b"); b.textContent = src.toUpperCase();
+    const t = document.createElement("span"); t.textContent = targets.map((x) => x.toUpperCase()).join(", ");
+    row.append(b, t);
+    rows.appendChild(row);
   }
-  const hint = Object.keys(SOURCES).map((s) => s.toUpperCase()).join(", ");
-  $("dropHint").textContent = `Accepted: ${hint} · up to 50 MB`;
+  el.appendChild(rows);
+  $("dropHint").textContent = "Up to 50 MB. Supported formats are listed below.";
 }
 
 async function loadFormats() {
