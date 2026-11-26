@@ -32,6 +32,8 @@ MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 MAX_PIXELS = 100_000_000      # largest image we decode (about 400 MB as RGBA)
 MAX_RENDER_PIXELS = 50_000_000  # largest PDF page we rasterise (dpi is lowered to fit)
 MAX_PDF_PAGES = 200           # pages turned into PNGs in one zip
+LO_TIMEOUT = 180              # seconds for one LibreOffice conversion
+PDF_TIMEOUT = 120             # seconds for PyMuPDF / pdf2docx work in the worker process
 
 
 @dataclass
@@ -121,6 +123,19 @@ def pdf_to_zip(data: bytes) -> bytes:
         doc.close()
 
 
+def _communicate_or_kill(proc: subprocess.Popen, data: bytes | None, timeout: float) -> tuple[bytes, bytes] | None:
+    """proc.communicate(), but on timeout kill its whole process group and return None.
+
+    proc must have been started with start_new_session=True.
+    """
+    try:
+        return proc.communicate(data, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        return None
+
+
 # --- Worker process for PDF work ---------------------------------------------------
 # PyMuPDF and pdf2docx run untrusted PDFs in native code with no time limit of their own.
 # Each call runs in a child process that is killed on timeout (or dies alone on a crash).
@@ -138,7 +153,8 @@ def _worker_main(name: str) -> None:
         out = globals()[name](data)
     except Exception as exc:
         kind = "value" if isinstance(exc, ValueError) else "other"
-        print(f"{_ERR_MARK}{kind}:{str(exc).splitlines()[0] if str(exc) else type(exc).__name__}", file=sys.stderr)
+        text = str(exc)
+        print(f"{_ERR_MARK}{kind}:{text.splitlines()[0] if text else type(exc).__name__}", file=sys.stderr)
         sys.exit(3)
     with os.fdopen(result_fd, "wb") as f:
         f.write(out)
@@ -149,12 +165,10 @@ def run_isolated(name: str, data: bytes, timeout: float | None = None) -> bytes:
     proc = subprocess.Popen(
         [sys.executable, "-c", _WORKER_CODE, str(Path(__file__).resolve().parent), name],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-    try:
-        out, err = proc.communicate(data, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
-        raise RuntimeError(f"the PDF conversion took longer than {timeout:g} s and was stopped") from None
+    result = _communicate_or_kill(proc, data, timeout)
+    if result is None:
+        raise RuntimeError(f"the PDF conversion took longer than {timeout:g} s and was stopped")
+    out, err = result
     if proc.returncode == 0:
         return out
     lines = [l for l in err.decode(errors="replace").splitlines() if l.startswith(_ERR_MARK)]
@@ -174,14 +188,12 @@ for _name, _dst, _ct in [
 
 # --- LibreOffice headless engine -------------------------------------------
 
-LO_TIMEOUT = 180
-PDF_TIMEOUT = 120  # PyMuPDF / pdf2docx work, run in a worker process we can kill
 # LibreOffice follows links in documents (HTML stylesheets, linked images). Run it in a new
 # network namespace so a crafted file cannot make it call localhost or the LAN.
 def _network_isolation() -> list[str]:
-    cmd = ["unshare", "--map-root-user", "--net"]
     if not shutil.which("unshare"):
         return []
+    cmd = ["unshare", "--map-root-user", "--net"]
     try:  # some systems disallow unprivileged namespaces; then run without
         ok = subprocess.run([*cmd, "true"], capture_output=True, timeout=10).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
@@ -207,12 +219,10 @@ def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
         # own process group, so a timeout can kill soffice.bin and not just the launcher
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 start_new_session=True)
-        try:
-            stdout, stderr = proc.communicate(timeout=LO_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
+        result = _communicate_or_kill(proc, None, LO_TIMEOUT)
+        if result is None:
             raise RuntimeError("LibreOffice conversion timed out")
+        stdout, stderr = result
         out = Path(td) / f"input.{dst_ext}"
         if not out.exists():
             err = (stdout + stderr).decode(errors="replace").strip()
@@ -369,7 +379,7 @@ def _best_routes_from(src: str) -> dict[str, Route]:
         for nxt in sorted(edges.get(here, [])):
             if nxt in path:
                 continue  # no loops
-            if len(path) >= 1 and here != src and here in LOSSY_INTERMEDIATES:
+            if here != src and here in LOSSY_INTERMEDIATES:
                 continue  # may not continue from a lossy stop
             walk(path + [nxt])
 
@@ -403,7 +413,7 @@ def run_chain(data: bytes, route: Route) -> bytes:
         try:
             data = REGISTRY[(src, dst)].run(data)
             if step < len(route) and len(data) > MAX_BYTES:
-                raise ValueError("intermediate result is over the 50 MB limit")
+                raise ValueError(f"intermediate result is over the {MAX_BYTES >> 20} MB limit")
         except Exception as exc:
             if len(route) == 1:
                 raise
@@ -432,7 +442,7 @@ def convert_path(path: Path, fmt: str) -> tuple[bytes, Route]:
     if size == 0:
         raise ValueError("file is empty")
     if size > MAX_BYTES:
-        raise ValueError("file is over the 50 MB limit")
+        raise ValueError(f"file is over the {MAX_BYTES >> 20} MB limit")
     return run_chain(path.read_bytes(), route), route
 
 

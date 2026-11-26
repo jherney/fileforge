@@ -22,6 +22,7 @@ log = logging.getLogger("fileforge")
 PORT = 8420
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 ALLOWED_ORIGINS = {f"http://{h}:{PORT}" for h in LOCAL_HOSTS}
+TOO_LARGE = f"File too large ({MAX_BYTES >> 20} MB limit)"
 CONVERSION_SLOTS = asyncio.Semaphore(2)  # each conversion can use a lot of memory or a whole LibreOffice
 
 app = FastAPI(title="FileForge")
@@ -40,7 +41,7 @@ async def refuse_oversize_early(request, call_next):
         if not declared.isdigit():
             return JSONResponse({"detail": "Content-Length is required"}, status_code=411)
         if int(declared) > MAX_BYTES + 1024 * 1024:
-            return JSONResponse({"detail": "File too large (50 MB limit)"}, status_code=413)
+            return JSONResponse({"detail": TOO_LARGE}, status_code=413)
     return await call_next(request)
 
 
@@ -75,8 +76,6 @@ async def refuse_cross_site_writes(request, call_next):
 # --------------------------------------------------------------------------
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]+")
-
-
 TEMP_PATH = re.compile(r"(?:file://)?/(?:tmp|var|home|run)/\S*")
 
 
@@ -111,7 +110,7 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
     if not data:
         raise HTTPException(400, "Empty file")
     if len(data) > MAX_BYTES:
-        raise HTTPException(413, "File too large (50 MB limit)")
+        raise HTTPException(413, TOO_LARGE)
 
     try:
         async with CONVERSION_SLOTS:
