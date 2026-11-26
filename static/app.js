@@ -58,7 +58,7 @@ function fillTo() {
 }
 
 function syncUi() {
-  const ok = !!currentFile &&
+  const ok = !!currentFile && currentFile.size <= MAX_BYTES &&
     !!SOURCES[extOf(currentFile.name)] &&
     SOURCES[extOf(currentFile.name)].includes(toSel.value) &&
     fromSel.value === extOf(currentFile.name);
@@ -107,8 +107,15 @@ function renderAvailable() {
 }
 
 async function loadFormats() {
-  const res = await fetch("/api/formats");
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch("/api/formats");
+    if (!res.ok) throw new Error(res.statusText);
+    data = await res.json();
+  } catch (err) {
+    setStatus("Couldn’t load the format list — is the FileForge server running?", "err");
+    return;
+  }
   PAIRS = data.pairs;
   SOURCES = {};
   for (const p of PAIRS) (SOURCES[p.from] ||= []).push(p.to);
@@ -155,6 +162,11 @@ async function convert() {
 
 // events
 drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
+// a file dropped outside the zone would otherwise make the browser navigate to it
+for (const ev of ["dragover", "drop"]) window.addEventListener(ev, (e) => e.preventDefault());
 fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
 $("chipX").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -167,7 +179,10 @@ $("chipX").addEventListener("click", (e) => {
   drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => {
   const f = e.dataTransfer.files[0];
-  if (f) { fileInput.files = e.dataTransfer.files; setFile(f); }
+  if (f) {
+    fileInput.files = e.dataTransfer.files; setFile(f);
+    if (e.dataTransfer.files.length > 1 && !statusEl.textContent) setStatus("Using the first file only — one file at a time.");
+  }
 });
 fromSel.addEventListener("change", () => {
   // switching the source must match the chosen file
