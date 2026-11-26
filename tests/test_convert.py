@@ -170,6 +170,74 @@ class Content(unittest.TestCase):
             C.REGISTRY[("png", "jpg")].run(b"not an image")
 
 
+class Chains(unittest.TestCase):
+    def test_direct_pair_is_one_hop(self):
+        for pair in C.REGISTRY:
+            self.assertEqual(C.find_route(*pair), [pair])
+
+    def test_known_routes(self):
+        self.assertEqual(C.find_route("docx", "png"), [("docx", "pdf"), ("pdf", "png")])
+        self.assertEqual(C.find_route("pdf", "jpg"), [("pdf", "png"), ("png", "jpg")])
+        self.assertEqual(C.find_route("heic", "pdf"), [("heic", "pdf")])
+
+    def test_unreachable_is_none(self):
+        self.assertIsNone(C.find_route("png", "xyz"))
+        self.assertIsNone(C.find_route("xyz", "png"))
+
+    def test_every_route_is_valid(self):
+        sources = {a for (a, _) in C.REGISTRY}
+        targets = {b for (_, b) in C.REGISTRY}
+        for src in sources:
+            for dst in targets - {src}:
+                route = C.find_route(src, dst)
+                if route is None:
+                    continue
+                path = [route[0][0]] + [b for _, b in route]
+                self.assertEqual((path[0], path[-1]), (src, dst))
+                self.assertLessEqual(len(route), C.MAX_HOPS)
+                self.assertEqual(len(set(path)), len(path), f"loop in {path}")
+                self.assertTrue(all(hop in C.REGISTRY for hop in route), path)
+                self.assertTrue(all(a == b0 for (_, a), (b0, _) in zip(route, route[1:])), path)
+                self.assertFalse(set(path[1:-1]) & C.LOSSY_INTERMEDIATES, f"lossy stop in {path}")
+                if (src, dst) in C.REGISTRY:
+                    self.assertEqual(len(route), 1)
+
+    def test_chained_pairs_exclude_direct_ones(self):
+        chained = C.chained_pairs()
+        self.assertTrue(chained)
+        self.assertFalse(set(chained) & set(C.REGISTRY))
+        self.assertEqual(chained[("docx", "png")], [("docx", "pdf"), ("pdf", "png")])
+
+    def test_pdf_to_jpg_runs_through_png(self):
+        out = C.run_chain(SAMPLES["pdf"], C.find_route("pdf", "jpg"))
+        self.assertTrue(out.startswith(b"\xff\xd8"))
+
+    def test_docx_to_png_runs_through_pdf(self):
+        out = C.run_chain(SAMPLES["docx"], C.find_route("docx", "png"))
+        self.assertTrue(out.startswith(b"\x89PNG"))
+
+    def test_failure_names_the_hop(self):
+        real = C.REGISTRY[("png", "jpg")]
+        broken = type(real)("png", "jpg", real.content_type, lambda data: (_ for _ in ()).throw(RuntimeError("boom")))
+        with mock.patch.dict(C.REGISTRY, {("png", "jpg"): broken}):
+            with self.assertRaisesRegex(RuntimeError, r"png->jpg failed \(step 2 of 2\): boom"):
+                C.run_chain(SAMPLES["pdf"], C.find_route("pdf", "jpg"))
+
+    def test_oversize_intermediate_is_refused(self):
+        with mock.patch.object(C, "MAX_BYTES", 10):
+            with self.assertRaisesRegex(RuntimeError, "intermediate result is over"):
+                C.run_chain(SAMPLES["pdf"], C.find_route("pdf", "jpg"))
+
+    def test_image_to_pdf_page_follows_image_shape_and_flattens_transparency(self):
+        buf = io.BytesIO()
+        Image.new("RGBA", (200, 100), (0, 0, 0, 0)).save(buf, "PNG")   # fully transparent
+        pdf = C.REGISTRY[("png", "pdf")].run(buf.getvalue())
+        doc = pymupdf.open(stream=pdf, filetype="pdf")
+        self.assertAlmostEqual(doc[0].rect.width / doc[0].rect.height, 2.0, places=2)
+        px = doc[0].get_pixmap(dpi=36)
+        self.assertEqual(tuple(px.pixel(1, 1))[:3], (255, 255, 255))  # white, not black
+
+
 class Api(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -183,6 +251,20 @@ class Api(unittest.TestCase):
         pairs = {(p["from"], p["to"]) for p in self.c.get("/api/formats").json()["pairs"]}
         self.assertIn(("heic", "jpg"), pairs)
         self.assertIn(("pdf", "docx"), pairs)
+
+    def test_formats_lists_chained_pairs_with_via(self):
+        pairs = self.c.get("/api/formats").json()["pairs"]
+        chained = [p for p in pairs if (p["from"], p["to"]) == ("docx", "png")]
+        self.assertEqual(chained, [{"from": "docx", "to": "png", "via": ["pdf"]}])
+        direct = [p for p in pairs if (p["from"], p["to"]) == ("png", "jpg")]
+        self.assertEqual(direct, [{"from": "png", "to": "jpg"}])
+
+    def test_chained_convert_works(self):
+        r = self.post("scan.pdf", SAMPLES["pdf"], "pdf", "jpg")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"], "image/jpeg")
+        self.assertEqual(r.headers["x-download-filename"], "scan.jpg")
+        self.assertTrue(r.content.startswith(b"\xff\xd8"))
 
     def test_convert_ok_with_download_headers(self):
         r = self.post("photo.png", SAMPLES["png"], "png", "jpg")
@@ -198,7 +280,7 @@ class Api(unittest.TestCase):
         self.assertNotIn('"', name)
 
     def test_unsupported_pair_is_400(self):
-        self.assertEqual(self.post("a.png", SAMPLES["png"], "png", "docx").status_code, 400)
+        self.assertEqual(self.post("a.png", SAMPLES["png"], "png", "xyz").status_code, 400)
 
     def test_empty_file_is_400(self):
         self.assertEqual(self.post("a.png", b"", "png", "jpg").status_code, 400)

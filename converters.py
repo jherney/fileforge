@@ -182,16 +182,20 @@ IMAGE_SOURCES = {
 }
 
 
-def image_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
+def _open_image(data: bytes):
     from PIL import Image, UnidentifiedImageError
     from pillow_heif import register_heif_opener
 
     register_heif_opener()  # lets Image.open read .heic/.heif (idempotent)
     Image.MAX_IMAGE_PIXELS = 200_000_000  # decompression-bomb guard
     try:
-        im = Image.open(io.BytesIO(data))
+        return Image.open(io.BytesIO(data))
     except UnidentifiedImageError:
         raise ValueError("cannot read this image") from None
+
+
+def image_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
+    im = _open_image(data)
     if dst_ext == "jpg":
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")  # flatten alpha/palette for JPEG
@@ -204,7 +208,112 @@ def image_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
     return buf.getvalue()
 
 
+def image_to_pdf(data: bytes, src_ext: str) -> bytes:
+    """One page sized to the image (longest side 842 pt, like A4), first frame only."""
+    import pymupdf
+    from PIL import Image
+
+    im = _open_image(data)
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        flat = Image.new("RGB", im.size, "white")  # transparent areas become white, not black
+        flat.paste(im, mask=im.getchannel("A"))
+        im = flat
+    else:
+        im = im.convert("RGB")
+    jpeg = io.BytesIO()
+    im.save(jpeg, "JPEG", quality=92)
+    scale = 842 / max(im.size)
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=max(im.width * scale, 1), height=max(im.height * scale, 1))
+        page.insert_image(page.rect, stream=jpeg.getvalue())
+        return doc.tobytes()
+    finally:
+        doc.close()
+
+
 for _src, _targets in IMAGE_SOURCES.items():
     for _dst in _targets:
         register(_src, _dst, f"image/{'jpeg' if _dst == 'jpg' else _dst}")(
             functools.partial(image_convert, src_ext=_src, dst_ext=_dst))
+    register(_src, "pdf", "application/pdf")(functools.partial(image_to_pdf, src_ext=_src))
+
+
+# --- Chains: convert in more than one step ---------------------------------------
+# When no converter exists for a pair, find the shortest route through REGISTRY, e.g.
+# docx -> pdf -> png. A direct converter always wins over any route.
+
+MAX_HOPS = 3
+# Formats that throw away layout or frames: never used as a stop on the way.
+LOSSY_INTERMEDIATES = {"txt", "csv", "html", "rtf", "zip"}
+# Preferred stops, best first, to choose between routes of the same length.
+PREFERRED_INTERMEDIATES = ["pdf", "png", "docx", "jpg"]
+
+Route = list[tuple[str, str]]  # [(src, dst), ...], every pair is in REGISTRY
+
+
+def _rank(fmt: str) -> int:
+    return PREFERRED_INTERMEDIATES.index(fmt) if fmt in PREFERRED_INTERMEDIATES else len(PREFERRED_INTERMEDIATES)
+
+
+def _best_routes_from(src: str) -> dict[str, Route]:
+    """Best route from src to every format reachable in at most MAX_HOPS steps."""
+    edges: dict[str, list[str]] = {}
+    for (a, b) in REGISTRY:
+        edges.setdefault(a, []).append(b)
+    best: dict[str, tuple[tuple, Route]] = {}
+
+    def walk(path: list[str]):
+        here = path[-1]
+        if len(path) > 1:
+            stops = path[1:-1]
+            score = (len(path), tuple(_rank(x) for x in stops), tuple(path))
+            if here not in best or score < best[here][0]:
+                best[here] = (score, list(zip(path, path[1:])))
+        if len(path) - 1 >= MAX_HOPS:
+            return
+        for nxt in sorted(edges.get(here, [])):
+            if nxt in path:
+                continue  # no loops
+            if len(path) >= 1 and here != src and here in LOSSY_INTERMEDIATES:
+                continue  # may not continue from a lossy stop
+            walk(path + [nxt])
+
+    walk([src])
+    return {dst: route for dst, (_, route) in best.items()}
+
+
+def find_route(src: str, dst: str) -> Route | None:
+    """[(src, dst)] if a direct converter exists, else the shortest multi-step route, else None."""
+    if (src, dst) in REGISTRY:
+        return [(src, dst)]
+    return _best_routes_from(src).get(dst)
+
+
+def chained_pairs() -> dict[tuple[str, str], Route]:
+    """Every (src, dst) that has no direct converter but can be reached by a route."""
+    out = {}
+    for src in sorted({a for (a, _) in REGISTRY}):
+        for dst, route in _best_routes_from(src).items():
+            if (src, dst) not in REGISTRY and dst != src:
+                out[(src, dst)] = route
+    return out
+
+
+def run_chain(data: bytes, route: Route) -> bytes:
+    """Run each hop on the previous hop's output; a failure names the hop that broke."""
+    for step, (src, dst) in enumerate(route, start=1):
+        try:
+            data = REGISTRY[(src, dst)].run(data)
+            if step < len(route) and len(data) > MAX_BYTES:
+                raise ValueError("intermediate result is over the 50 MB limit")
+        except Exception as exc:
+            if len(route) == 1:
+                raise
+            raise RuntimeError(f"{src}->{dst} failed (step {step} of {len(route)}): {exc}") from exc
+    return data
+
+
+def content_type_for(route: Route) -> str:
+    return REGISTRY[route[-1]].content_type

@@ -5,6 +5,7 @@ const fromSel = $("fromSel"), toSel = $("toSel");
 
 let PAIRS = [];          // [{from, to}, ...]
 let SOURCES = {};        // ext -> [targets]
+let VIA = {};            // "src>dst" -> middle formats, for pairs converted in more than one step
 let currentFile = null;
 
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -51,11 +52,16 @@ function fillFrom() {
 function fillTo() {
   const prev = toSel.value;
   toSel.innerHTML = "";
+  const chained = document.createElement("optgroup");
+  chained.label = "Converted in steps";
   for (const t of (SOURCES[fromSel.value] || [])) {
+    const via = VIA[fromSel.value + ">" + t];
     const o = document.createElement("option");
-    o.value = t; o.textContent = t.toUpperCase();
-    toSel.appendChild(o);
+    o.value = t;
+    o.textContent = t.toUpperCase() + (via ? ` (via ${via.map((v) => v.toUpperCase()).join(", ")})` : "");
+    (via ? chained : toSel).appendChild(o);
   }
+  if (chained.children.length) toSel.appendChild(chained);
   if ([...toSel.options].some((o) => o.value === prev)) toSel.value = prev;
   syncUi();
 }
@@ -104,13 +110,16 @@ function renderAvailable() {
     if (src === "jpeg") continue; // shown as JPG
     const row = document.createElement("div");
     row.className = "row";
-    const targets = [...new Set(SOURCES[src])];
+    const targets = [...new Set(SOURCES[src])].filter((t) => !VIA[src + ">" + t]);
     const b = document.createElement("b"); b.textContent = src.toUpperCase();
     const t = document.createElement("span"); t.textContent = targets.map((x) => x.toUpperCase()).join(", ");
     row.append(b, t);
     rows.appendChild(row);
   }
   el.appendChild(rows);
+  const note = document.createElement("p");
+  note.textContent = "Where there is no direct converter, FileForge converts in steps, for example Word to PNG by way of PDF. Those targets are listed under “Converted in steps” once you pick a file.";
+  el.appendChild(note);
   $("dropHint").textContent = "Up to 50 MB. Supported formats are listed below.";
 }
 
@@ -126,7 +135,11 @@ async function loadFormats() {
   }
   PAIRS = data.pairs;
   SOURCES = {};
-  for (const p of PAIRS) (SOURCES[p.from] ||= []).push(p.to);
+  VIA = {};
+  for (const p of PAIRS) {
+    (SOURCES[p.from] ||= []).push(p.to);
+    if (p.via) VIA[p.from + ">" + p.to] = p.via;
+  }
   fillFrom();
   renderAvailable();
   syncUi();

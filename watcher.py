@@ -8,8 +8,9 @@ Folders named to-<fmt> (to-pdf, to-docx, to-png, ...) are picked up as you
 create them. Originals are never moved, changed or deleted. A failed
 conversion writes failed/<name>.err and the watcher keeps going; delete that
 .err file (or start with --retry-failed) to try the file again. Converters
-come straight from REGISTRY in converters.py and run one at a time, so two drops
-never collide inside LibreOffice.
+come straight from REGISTRY in converters.py (a file with no direct converter, say
+a .docx in to-png/, goes through the shortest chain, here docx -> pdf -> png) and
+run one at a time, so two drops never collide inside LibreOffice.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from converters import MAX_BYTES, REGISTRY, free_name
+from converters import MAX_BYTES, REGISTRY, find_route, free_name, run_chain
 
 TARGETS = {t for (_, t) in REGISTRY}
 SKIP_SUFFIXES = {".part", ".crdownload", ".tmp", ".partial", ".download"}
@@ -56,6 +57,8 @@ def history_lines(log_path: Path, n: int) -> list[str]:
     out = []
     for r in read_log(log_path)[-n:]:
         detail = r.get("output") or r.get("error") or ""
+        if r.get("route"):
+            detail += f" (via {', '.join(r['route'][1:-1])})"
         out.append(f"{r.get('ts', '')}  {r.get('status', ''):6}  {Path(r['path']).name}  {detail}".rstrip())
     return out
 
@@ -120,20 +123,21 @@ class Watcher:
         return converted
 
     @staticmethod
-    def _run_converter(p: Path, fmt: str, st) -> bytes:
+    def _run_converter(p: Path, fmt: str, st):
+        """(output bytes, route). Uses a direct converter, else the shortest multi-step route."""
         src = p.suffix.lower().lstrip(".")
-        conv = REGISTRY.get((src, fmt))
-        if conv is None:
+        route = find_route(src, fmt)
+        if route is None:
             raise ValueError(f"cannot convert {src or 'this file type'} to {fmt}")
         if st.st_size == 0:
             raise ValueError("file is empty")
         if st.st_size > MAX_BYTES:
             raise ValueError("file is over the 50 MB limit")
-        return conv.run(p.read_bytes())
+        return run_chain(p.read_bytes(), route), route
 
     def convert(self, p: Path, fmt: str, st) -> int:
         try:
-            data = self._run_converter(p, fmt, st)
+            data, route = self._run_converter(p, fmt, st)
         except Exception as exc:  # any converter failure must not stop the watcher
             failed = p.parent / "failed"
             failed.mkdir(exist_ok=True)
@@ -148,9 +152,10 @@ class Watcher:
         tmp = out.with_name(f".{out.name}.tmp")
         tmp.write_bytes(data)
         tmp.rename(out)
-        self._log(p, st, "ok", output=str(out))
+        steps = [route[0][0]] + [dst for _, dst in route]  # e.g. ["docx", "pdf", "png"]
+        self._log(p, st, "ok", output=str(out), **({"route": steps} if len(route) > 1 else {}))
         notify(f"Converted {p.name}", f"Saved {out.name}")
-        print(f"OK {p.name} -> {out}", flush=True)
+        print(f"OK {p.name} -> {out}" + (f" (via {', '.join(steps[1:-1])})" if len(route) > 1 else ""), flush=True)
         return 1
 
 

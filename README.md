@@ -25,7 +25,10 @@ Open http://127.0.0.1:8420, drop a file in, pick a target format, convert.
 
 PDF → Word uses [pdf2docx](https://github.com/dothinking/pdf2docx), which
 preserves layout, tables, and fonts far better than a generic converter.
-The live, authoritative list is always `GET /api/formats`.
+Where there is no direct converter, FileForge converts in steps, for example Word
+to PNG by way of PDF, or PDF to JPG by way of PNG. See `docs/designs/chains.md`.
+Images also convert to PDF (one page per file, transparency flattened to white).
+The live, authoritative list, including `via` for chained pairs, is always `GET /api/formats`.
 
 ## Engines
 

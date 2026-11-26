@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from converters import MAX_BYTES, REGISTRY
+from converters import MAX_BYTES, REGISTRY, chained_pairs, content_type_for, find_route, run_chain
 
 PORT = 8420
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
@@ -61,14 +61,16 @@ def _safe_stem(filename: str) -> str:
 @app.get("/api/formats")
 def formats():
     pairs = [{"from": s, "to": t} for (s, t) in sorted(REGISTRY)]
+    for (s, t), route in sorted(chained_pairs().items()):
+        pairs.append({"from": s, "to": t, "via": [dst for _, dst in route[:-1]]})
     return JSONResponse({"pairs": pairs})
 
 
 @app.post("/api/convert")
 async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx"):
     key = (fmt_from.lower().strip("."), fmt_to.lower().strip("."))
-    conv = REGISTRY.get(key)
-    if conv is None:
+    route = find_route(*key)  # one hop if a direct converter exists, else a chain
+    if route is None:
         raise HTTPException(400, f"Unsupported conversion: {key[0]} -> {key[1]}")
 
     data = await file.read(MAX_BYTES + 1)  # never hold more than the limit in memory
@@ -78,12 +80,12 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
         raise HTTPException(413, "File too large (50 MB limit)")
 
     try:
-        out = await run_in_threadpool(conv.run, data)
+        out = await run_in_threadpool(run_chain, data, route)
     except Exception as exc:  # converter failure -> 422 with a readable message
         raise HTTPException(422, f"Conversion failed: {exc}") from exc
 
     name = f"{_safe_stem(file.filename)}.{key[1]}"
-    return _download(out, name, conv.content_type)
+    return _download(out, name, content_type_for(route))
 
 
 def _download(data: bytes, name: str, content_type: str):

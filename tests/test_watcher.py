@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image  # noqa: E402
 
+import pymupdf  # noqa: E402
 import watcher  # noqa: E402
 from watcher import Watcher, history_lines  # noqa: E402
 
@@ -126,6 +127,27 @@ class WatcherTest(unittest.TestCase):
         self.scan_twice(Watcher(self.root, retry_failed=True))
         rows = watcher.read_log(self.root / "watcher.jsonl")
         self.assertEqual([r["status"] for r in rows], ["failed", "failed"])  # retried, failed again
+
+    def make_pdf(self) -> bytes:
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), "hello")
+        return doc.tobytes()
+
+    def test_file_without_direct_converter_goes_through_a_chain(self):
+        self.drop("scan.pdf", self.make_pdf())                 # pdf -> jpg has no direct pair
+        self.assertEqual(self.scan_twice(), 1)
+        self.assertTrue((self.inbox / "out" / "scan.jpg").read_bytes().startswith(b"\xff\xd8"))
+        rows = watcher.read_log(self.root / "watcher.jsonl")
+        self.assertEqual(rows[-1]["route"], ["pdf", "png", "jpg"])
+        self.assertIn("(via png)", history_lines(self.root / "watcher.jsonl", 5)[-1])
+
+    def test_chain_failure_names_the_hop_in_the_err_file(self):
+        real = watcher.REGISTRY[("png", "jpg")]
+        broken = type(real)("png", "jpg", real.content_type, lambda data: (_ for _ in ()).throw(RuntimeError("boom")))
+        self.drop("scan.pdf", self.make_pdf())
+        with mock.patch.dict(watcher.REGISTRY, {("png", "jpg"): broken}):
+            self.scan_twice()
+        self.assertIn("png->jpg failed (step 2 of 2)", (self.inbox / "failed" / "scan.pdf.err").read_text())
 
     def test_history_lines(self):
         self.drop("a.png")
