@@ -245,6 +245,15 @@ def importlib_notify():
     return real
 
 
+class Tif(unittest.TestCase):
+    def test_tif_converts_like_tiff(self):
+        data = enc(Image.new("RGB", (8, 8)), "TIFF")
+        self.assertEqual(size_of(C.REGISTRY[("tif", "png")].run(data)), (8, 8))
+        self.assertEqual(C.find_route("tif", "pdf"), [("tif", "pdf")])
+        self.assertEqual(sorted(t for s, t in C.REGISTRY if s == "tif"),
+                         sorted(t for s, t in C.REGISTRY if s == "tiff"))
+
+
 class AppSafety(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
@@ -258,6 +267,11 @@ class AppSafety(unittest.TestCase):
         r = self.c.post("/api/convert?fmt_from=png&fmt_to=jpg", content=body(),
                         headers={"Content-Type": "multipart/form-data; boundary=b"})
         self.assertEqual(r.status_code, 411)
+
+    def test_just_over_the_size_limit_is_413_not_a_converter_error(self):
+        over = b"\0" * (self.A.MAX_BYTES + 1024)
+        r = self.c.post("/api/convert?fmt_from=pdf&fmt_to=txt", files={"file": ("a.pdf", over)})
+        self.assertEqual(r.status_code, 413)
 
     def test_security_headers_on_the_page_and_the_api(self):
         for path in ("/", "/api/formats"):

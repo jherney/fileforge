@@ -65,6 +65,7 @@ def setUpModule():
     b = io.BytesIO()
     im.convert("RGB").save(b, "JPEG")
     SAMPLES["jpg"] = SAMPLES["jpeg"] = b.getvalue()
+    SAMPLES["tif"] = SAMPLES["tiff"]
 
 
 def looks_valid(ext: str, d: bytes) -> bool:

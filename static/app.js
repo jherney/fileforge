@@ -21,8 +21,11 @@ function extOf(name) {
   return i === -1 ? "" : name.slice(i + 1).toLowerCase();
 }
 
-// .jpeg files are converted as JPG
-const srcKey = (ext) => (ext === "jpeg" ? "jpg" : ext);
+// alternative extensions share one entry in the From list
+const ALIAS = { jpeg: "jpg", tif: "tiff" };
+const LABEL = { jpg: "JPG / JPEG", tiff: "TIFF / TIF" };
+const srcKey = (ext) => ALIAS[ext] || ext;
+const mainSources = () => Object.keys(SOURCES).filter((e) => !(e in ALIAS)).sort();
 const DEFAULT_TARGETS = ["pdf", "png", "jpg"];
 
 function setStatus(msg, cls = "") {
@@ -45,9 +48,9 @@ function fillFrom() {
   const ph = document.createElement("option");
   ph.value = ""; ph.textContent = "Choose a format…"; ph.disabled = true; ph.selected = true;
   fromSel.appendChild(ph);
-  for (const ext of Object.keys(SOURCES).filter((e) => e !== "jpeg").sort()) {
+  for (const ext of mainSources()) {
     const o = document.createElement("option");
-    o.value = ext; o.textContent = ext === "jpg" ? "JPG / JPEG" : ext.toUpperCase();
+    o.value = ext; o.textContent = LABEL[ext] || ext.toUpperCase();
     fromSel.appendChild(o);
   }
   fillTo();
@@ -113,7 +116,7 @@ function setFile(f) {
     fromSel.value = "";  // don't leave the previous file's formats selected
     fillTo();
     setStatus(!SOURCES[key]
-      ? `Unsupported file type “${ext || "none"}”. Supported: ${Object.keys(SOURCES).filter((e) => e !== "jpeg").sort().map((e) => e.toUpperCase()).join(", ")}.`
+      ? `Unsupported file type “${ext || "none"}”. Supported: ${mainSources().map((e) => e.toUpperCase()).join(", ")}.`
       : `File is ${fmtSize(f.size)} — the limit is 50 MB.`, "err");
   } else {
     fromSel.value = key;
@@ -130,7 +133,7 @@ function renderAvailable() {
   const rows = document.createElement("div");
   rows.className = "rows";
   for (const src of Object.keys(SOURCES).sort()) {
-    if (src === "jpeg") continue; // shown as JPG
+    if (src in ALIAS) continue; // shown under its main entry
     const row = document.createElement("div");
     row.className = "row";
     const targets = [...new Set(SOURCES[src])].filter((t) => !VIA[src + ">" + t]);

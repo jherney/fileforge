@@ -254,6 +254,7 @@ IMAGE_SOURCES = {
     "gif": ["png", "jpg", "webp", "bmp"],
     "bmp": ["png", "jpg", "webp", "gif", "tiff"],
     "tiff": ["png", "jpg", "webp", "gif", "bmp"],
+    "tif": ["png", "jpg", "webp", "gif", "bmp"],  # same format, the common short extension
     "heic": ["jpg", "png", "webp", "gif", "bmp", "tiff"],  # phone photos
     "heif": ["jpg", "png", "webp", "gif", "bmp", "tiff"],
 }
