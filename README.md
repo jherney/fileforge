@@ -94,6 +94,17 @@ python3 cli.py convert ~/Scans --to pdf -r            # every convertible file i
 python3 cli.py targets report.docx                   # what can this file become?
 ```
 
+### Dolphin right-click menu (KDE Plasma 6)
+
+```bash
+python3 deploy/kde/install_servicemenu.py            # adds "Convert to..." to Dolphin's context menu
+python3 deploy/kde/install_servicemenu.py --uninstall
+```
+
+It calls `cli.py convert ... --notify`, so results appear beside the originals with a desktop
+notification. The menu lists every format for every readable file type; a pair with no route
+ends in a "failed" notification. Re-run the installer if you move the repo.
+
 Nothing is overwritten (a taken name becomes `photo-1.jpg`). Exit status: 0 all
 converted, 1 a conversion failed, 2 bad request (missing file, no way to reach the format).
 
