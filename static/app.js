@@ -75,6 +75,14 @@ function fillTo() {
   syncUi();
 }
 
+// with a valid source chosen and no target yet, pick PDF, PNG or JPG when offered directly
+function applyDefaultTarget() {
+  if (toSel.value || !fromSel.value) return;
+  const direct = [...toSel.querySelectorAll(":scope > option")].map((o) => o.value);
+  toSel.value = DEFAULT_TARGETS.find((t) => direct.includes(t)) || "";
+  syncUi();
+}
+
 function syncUi() {
   const key = currentFile ? srcKey(extOf(currentFile.name)) : "";
   const ok = !!currentFile && currentFile.size <= MAX_BYTES &&
@@ -110,10 +118,7 @@ function setFile(f) {
   } else {
     fromSel.value = key;
     fillTo();
-    if (!toSel.value) {
-      const direct = [...toSel.querySelectorAll(":scope > option")].map((o) => o.value);
-      toSel.value = DEFAULT_TARGETS.find((t) => direct.includes(t)) || "";
-    }
+    applyDefaultTarget();
     setStatus("");
   }
   syncUi();
@@ -232,6 +237,7 @@ fromSel.addEventListener("change", () => {
     setStatus("");
   }
   fillTo();
+  applyDefaultTarget();
 });
 toSel.addEventListener("change", () => { setStatus(""); syncUi(); });
 go.addEventListener("click", convert);
