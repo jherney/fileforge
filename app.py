@@ -37,6 +37,15 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 
 
 @app.middleware("http")
+async def refuse_oversize_early(request, call_next):
+    # Stop a huge upload from its Content-Length header, before the body is parsed.
+    declared = request.headers.get("content-length", "")
+    if request.method == "POST" and declared.isdigit() and int(declared) > MAX_BYTES + 1024 * 1024:
+        return JSONResponse({"detail": "File too large (50 MB limit)"}, status_code=413)
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def refuse_cross_site_writes(request, call_next):
     origin = request.headers.get("origin")
     if request.method not in ("GET", "HEAD", "OPTIONS") and origin is not None:
@@ -103,6 +112,24 @@ def pdf_to_png(data: bytes) -> bytes:
     try:
         pix = doc[0].get_pixmap(dpi=150)
         return pix.tobytes("png")
+    finally:
+        doc.close()
+
+
+@register("pdf", "zip", "application/zip")
+def pdf_to_zip(data: bytes) -> bytes:
+    """Every page as page-001.png, page-002.png, ... (150 dpi) in one zip."""
+    import zipfile
+
+    import pymupdf
+
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    try:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:  # PNGs are already compressed
+            for i, page in enumerate(doc, start=1):
+                z.writestr(f"page-{i:03d}.png", page.get_pixmap(dpi=150).tobytes("png"))
+        return buf.getvalue()
     finally:
         doc.close()
 
@@ -225,7 +252,7 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
     if conv is None:
         raise HTTPException(400, f"Unsupported conversion: {key[0]} -> {key[1]}")
 
-    data = await file.read()
+    data = await file.read(MAX_BYTES + 1)  # never hold more than the limit in memory
     if not data:
         raise HTTPException(400, "Empty file")
     if len(data) > MAX_BYTES:

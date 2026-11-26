@@ -16,7 +16,7 @@ Open http://127.0.0.1:8420, drop a file in, pick a target format, convert.
 
 | Group | Sources | Targets |
 |---|---|---|
-| PDF (dedicated engines) | pdf | docx, txt, png |
+| PDF (dedicated engines) | pdf | docx, txt, png (first page), zip (every page as a PNG) |
 | Documents (LibreOffice) | doc, docx, odt, rtf, txt, html | pdf + each other |
 | Spreadsheets (LibreOffice) | xls, xlsx, ods, csv | pdf + each other |
 | Presentations (LibreOffice) | ppt, pptx, odp | pdf + each other |
@@ -63,8 +63,13 @@ folder's `out/` subfolder. Originals are never touched; failures write
 `failed/<name>.err`. Any `to-<format>` folder you create is picked up.
 
 ```bash
-python3 watcher.py            # run it by hand
+python3 watcher.py                 # run it by hand
+python3 watcher.py --history -n 20  # recent conversions and failures
+python3 watcher.py --retry-failed   # try files that failed before again
 ```
+
+To retry one failed file, delete its `failed/<name>.err`; the watcher picks it up
+again on the next scan.
 
 To start it on login (assumes the repo is at `~/fileforge`):
 

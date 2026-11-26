@@ -6,7 +6,8 @@ converted file appears in its out/ subfolder. No browser needed.
 
 Folders named to-<fmt> (to-pdf, to-docx, to-png, ...) are picked up as you
 create them. Originals are never moved, changed or deleted. A failed
-conversion writes failed/<name>.err and the watcher keeps going. Converters
+conversion writes failed/<name>.err and the watcher keeps going; delete that
+.err file (or start with --retry-failed) to try the file again. Converters
 come straight from REGISTRY in app.py and run one at a time, so two drops
 never collide inside LibreOffice.
 """
@@ -46,26 +47,47 @@ def notify(title: str, body: str) -> None:
         subprocess.run(["notify-send", "-a", "FileForge", title, body], check=False)
 
 
-class Watcher:
-    def __init__(self, root: Path):
-        self.root = root
-        self.seen: dict[Path, tuple[int, int]] = {}   # path -> (size, mtime_ns) at last poll
-        self.done: set[tuple[str, int, int]] = set()  # (path, size, mtime_ns) already handled
-        self.log_path = root / LOG_NAME
-        self._load_log()
-
-    def _load_log(self) -> None:
-        if not self.log_path.exists():
-            return
-        for line in self.log_path.read_text().splitlines():
+def read_log(log_path: Path) -> list[dict]:
+    rows = []
+    if log_path.exists():
+        for line in log_path.read_text().splitlines():
             try:
                 r = json.loads(line)
-                self.done.add((r["path"], r["size"], r["mtime_ns"]))
-            except (ValueError, KeyError):
+                r["path"], r["size"], r["mtime_ns"]
+                rows.append(r)
+            except (ValueError, KeyError, TypeError):
                 continue
+    return rows
+
+
+def history_lines(log_path: Path, n: int) -> list[str]:
+    """The last n log rows, one readable line each."""
+    out = []
+    for r in read_log(log_path)[-n:]:
+        detail = r.get("output") or r.get("error") or ""
+        out.append(f"{r.get('ts', '')}  {r.get('status', ''):6}  {Path(r['path']).name}  {detail}".rstrip())
+    return out
+
+
+class Watcher:
+    def __init__(self, root: Path, retry_failed: bool = False):
+        self.root = root
+        self.seen: dict[Path, tuple[int, int]] = {}   # path -> (size, mtime_ns) at last poll
+        self.done: set[tuple[str, int, int]] = set()  # converted: never redone
+        self.failed: set[tuple[str, int, int]] = set()  # failed: retried when its .err is deleted
+        self.log_path = root / LOG_NAME
+        self._load_log(retry_failed)
+
+    def _load_log(self, retry_failed: bool) -> None:
+        for r in read_log(self.log_path):
+            key = (r["path"], r["size"], r["mtime_ns"])
+            if r.get("status") == "ok":
+                self.done.add(key)
+            elif not retry_failed:
+                self.failed.add(key)
 
     def _log(self, path: Path, st, status: str, **extra) -> None:
-        self.done.add((str(path), st.st_size, st.st_mtime_ns))
+        (self.done if status == "ok" else self.failed).add((str(path), st.st_size, st.st_mtime_ns))
         rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "path": str(path),
                "size": st.st_size, "mtime_ns": st.st_mtime_ns, "status": status, **extra}
         with self.log_path.open("a") as f:
@@ -95,8 +117,13 @@ class Watcher:
                 current[p] = sig
                 if self.seen.get(p) != sig:
                     continue  # new or still changing: wait one more poll
-                if (str(p), *sig) in self.done:
+                key = (str(p), *sig)
+                if key in self.done:
                     continue
+                if key in self.failed:
+                    if (p.parent / "failed" / f"{p.name}.err").exists():
+                        continue
+                    self.failed.discard(key)  # its .err was deleted: try again
                 converted += self.convert(p, fmt, st)
         self.seen = current
         return converted
@@ -136,11 +163,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", type=Path, default=Path.home() / "Convert")
     ap.add_argument("--interval", type=float, default=2.0, help="seconds between scans")
+    ap.add_argument("--retry-failed", action="store_true", help="try files that failed before again")
+    ap.add_argument("--history", action="store_true", help="print recent conversions and exit")
+    ap.add_argument("-n", type=int, default=20, help="rows to show with --history")
     args = ap.parse_args()
+    if args.history:
+        print("\n".join(history_lines(args.root / LOG_NAME, args.n)) or "No conversions logged yet.")
+        return 0
     args.root.mkdir(parents=True, exist_ok=True)
     if not any(args.root.glob("to-*")):
         (args.root / "to-pdf").mkdir()
-    w = Watcher(args.root)
+    w = Watcher(args.root, retry_failed=args.retry_failed)
     print(f"Watching {args.root}: {', '.join(d.name for d, _ in w.target_dirs())}", flush=True)
     try:
         while True:

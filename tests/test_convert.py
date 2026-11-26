@@ -73,7 +73,7 @@ def setUpModule():
 def looks_valid(ext: str, d: bytes) -> bool:
     if len(d) == 0:
         return False
-    zips = {"docx", "xlsx", "pptx", "odt", "ods", "odp"}
+    zips = {"docx", "xlsx", "pptx", "odt", "ods", "odp", "zip"}
     if ext in zips:
         return d[:2] == b"PK" and zipfile.is_zipfile(io.BytesIO(d))
     return {
@@ -134,6 +134,17 @@ class Content(unittest.TestCase):
         w, h = Image.open(io.BytesIO(out)).size
         self.assertGreater(w, 500)
         self.assertGreater(h, 500)
+
+    def test_pdf_to_zip_has_every_page(self):
+        doc = pymupdf.open()
+        for n in range(3):
+            doc.new_page().insert_text((72, 72), f"page {n + 1}")
+        three_pages = doc.tobytes()
+        out = A.REGISTRY[("pdf", "zip")].run(three_pages)
+        with zipfile.ZipFile(io.BytesIO(out)) as z:
+            self.assertEqual(z.namelist(), ["page-001.png", "page-002.png", "page-003.png"])
+            for name in z.namelist():
+                self.assertTrue(z.read(name).startswith(b"\x89PNG"))
 
     def test_docx_to_txt_keeps_text(self):
         self.assertIn("Hello FileForge", A.REGISTRY[("docx", "txt")].run(SAMPLES["docx"]).decode())
@@ -211,6 +222,16 @@ class Api(unittest.TestCase):
     def test_foreign_host_header_is_refused(self):  # DNS-rebinding case
         r = self.c.get("/api/formats", headers={"Host": "evil.example"})
         self.assertEqual(r.status_code, 400)
+
+    def test_declared_huge_upload_is_refused_before_parsing(self):
+        r = self.c.post("/api/convert?fmt_from=png&fmt_to=jpg", files={"file": ("a.png", SAMPLES["png"])},
+                        headers={"Content-Length": str(A.MAX_BYTES + 5 * 1024 * 1024)})
+        self.assertEqual(r.status_code, 413)
+
+    def test_body_over_limit_is_refused_even_if_header_lies(self):
+        with mock.patch.object(A, "MAX_BYTES", 10):
+            r = self.post("a.png", SAMPLES["png"], "png", "jpg")
+        self.assertEqual(r.status_code, 413)
 
     def test_corrupt_file_is_422(self):
         self.assertEqual(self.post("a.png", b"not an image", "png", "jpg").status_code, 422)
