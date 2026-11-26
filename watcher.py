@@ -8,7 +8,7 @@ Folders named to-<fmt> (to-pdf, to-docx, to-png, ...) are picked up as you
 create them. Originals are never moved, changed or deleted. A failed
 conversion writes failed/<name>.err and the watcher keeps going; delete that
 .err file (or start with --retry-failed) to try the file again. Converters
-come straight from REGISTRY in app.py and run one at a time, so two drops
+come straight from REGISTRY in converters.py and run one at a time, so two drops
 never collide inside LibreOffice.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-from app import MAX_BYTES, REGISTRY
+from converters import MAX_BYTES, REGISTRY, free_name
 
 TARGETS = {t for (_, t) in REGISTRY}
 SKIP_SUFFIXES = {".part", ".crdownload", ".tmp", ".partial", ".download"}
@@ -31,15 +31,6 @@ LOG_NAME = "watcher.jsonl"
 def ignored(p: Path) -> bool:
     n = p.name
     return n.startswith(".") or n.endswith("~") or p.suffix.lower() in SKIP_SUFFIXES
-
-
-def free_name(folder: Path, stem: str, ext: str) -> Path:
-    out = folder / f"{stem}.{ext}"
-    i = 1
-    while out.exists():
-        out = folder / f"{stem}-{i}.{ext}"
-        i += 1
-    return out
 
 
 def notify(title: str, body: str) -> None:
@@ -53,7 +44,7 @@ def read_log(log_path: Path) -> list[dict]:
         for line in log_path.read_text().splitlines():
             try:
                 r = json.loads(line)
-                r["path"], r["size"], r["mtime_ns"]
+                r["path"], r["size"], r["mtime_ns"]  # reject rows missing the key fields
                 rows.append(r)
             except (ValueError, KeyError, TypeError):
                 continue
@@ -128,17 +119,21 @@ class Watcher:
         self.seen = current
         return converted
 
-    def convert(self, p: Path, fmt: str, st) -> int:
+    @staticmethod
+    def _run_converter(p: Path, fmt: str, st) -> bytes:
         src = p.suffix.lower().lstrip(".")
         conv = REGISTRY.get((src, fmt))
+        if conv is None:
+            raise ValueError(f"cannot convert {src or 'this file type'} to {fmt}")
+        if st.st_size == 0:
+            raise ValueError("file is empty")
+        if st.st_size > MAX_BYTES:
+            raise ValueError("file is over the 50 MB limit")
+        return conv.run(p.read_bytes())
+
+    def convert(self, p: Path, fmt: str, st) -> int:
         try:
-            if conv is None:
-                raise ValueError(f"cannot convert {src or 'this file type'} to {fmt}")
-            if st.st_size == 0:
-                raise ValueError("file is empty")
-            if st.st_size > MAX_BYTES:
-                raise ValueError("file is over the 50 MB limit")
-            data = conv.run(p.read_bytes())
+            data = self._run_converter(p, fmt, st)
         except Exception as exc:  # any converter failure must not stop the watcher
             failed = p.parent / "failed"
             failed.mkdir(exist_ok=True)

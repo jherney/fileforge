@@ -38,7 +38,7 @@ The live, authoritative list is always `GET /api/formats`.
 
 ## Adding a format pair
 
-Register a function in `app.py`:
+Register a function in `converters.py`:
 
 ```python
 @register("src", "dst", "mime/type")
@@ -51,7 +51,7 @@ The UI picks it up automatically from `/api/formats` — no frontend changes.
 
 ## Limits
 
-- 50 MB per file (`MAX_BYTES` in `app.py`)
+- 50 MB per file (`MAX_BYTES` in `converters.py`)
 - LibreOffice conversions time out after 180 s
 - Listens on 127.0.0.1 only; it is a local tool, not a public service
 

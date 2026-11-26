@@ -1,10 +1,10 @@
 import io
 import os
 import sys
-from unittest import mock
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -33,12 +33,15 @@ class WatcherTest(unittest.TestCase):
     def tearDown(self):
         self._td.cleanup()
 
+    def drop(self, name, data=None):
+        (self.inbox / name).write_bytes(png_bytes() if data is None else data)
+
     def scan_twice(self, w=None):
         w = w or self.w
         return w.poll() + w.poll()  # first poll only records size/mtime
 
     def test_converts_and_keeps_original(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
+        self.drop("a.png")
         self.assertEqual(self.scan_twice(), 1)
         self.assertTrue((self.inbox / "out" / "a.jpg").exists())
         self.assertTrue((self.inbox / "a.png").exists())
@@ -58,7 +61,7 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(self.scan_twice(), 0)
 
     def test_failure_writes_err_and_does_not_retry(self):
-        (self.inbox / "bad.png").write_bytes(b"not an image")
+        self.drop("bad.png", b"not an image")
         self.assertEqual(self.scan_twice(), 0)
         self.assertTrue((self.inbox / "failed" / "bad.png.err").read_text().strip())
         self.assertTrue((self.inbox / "bad.png").exists())
@@ -71,20 +74,20 @@ class WatcherTest(unittest.TestCase):
         self.assertIn("cannot convert", (self.inbox / "failed" / "notes.xyz.err").read_text())
 
     def test_same_name_gets_new_output_name(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
+        self.drop("a.png")
         self.scan_twice()
-        (self.inbox / "a.png").write_bytes(png_bytes() + b"\0")  # same name, new content
+        self.drop("a.png", png_bytes() + b"\0")  # same name, new content
         self.scan_twice()
         names = sorted(p.name for p in (self.inbox / "out").iterdir())
         self.assertEqual(names, ["a-1.jpg", "a.jpg"])
 
     def test_two_files_both_convert(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
-        (self.inbox / "b.png").write_bytes(png_bytes())
+        self.drop("a.png")
+        self.drop("b.png")
         self.assertEqual(self.scan_twice(), 2)
 
     def test_restart_does_not_reconvert(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
+        self.drop("a.png")
         self.scan_twice()
         again = Watcher(self.root)
         self.assertEqual(self.scan_twice(again), 0)
@@ -103,7 +106,7 @@ class WatcherTest(unittest.TestCase):
         return mock.patch.dict(watcher.REGISTRY, {("png", "jpg"): type(real)("png", "jpg", real.content_type, run)})
 
     def test_deleting_err_file_retries(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
+        self.drop("a.png")
         with self.flaky_png_to_jpg():
             self.assertEqual(self.scan_twice(), 0)           # fails once
             err = self.inbox / "failed" / "a.png.err"
@@ -117,18 +120,16 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(self.scan_twice(Watcher(self.root)), 0)  # restart: ok file not redone
 
     def test_failed_file_stays_failed_across_restart_unless_retry_flag(self):
-        (self.inbox / "bad.png").write_bytes(b"not an image")
+        self.drop("bad.png", b"not an image")
         self.scan_twice()
         self.assertEqual(self.scan_twice(Watcher(self.root)), 0)
-        with mock.patch.object(watcher, "REGISTRY", watcher.REGISTRY):
-            again = Watcher(self.root, retry_failed=True)
-            again.poll(); again.poll()
+        self.scan_twice(Watcher(self.root, retry_failed=True))
         rows = watcher.read_log(self.root / "watcher.jsonl")
         self.assertEqual([r["status"] for r in rows], ["failed", "failed"])  # retried, failed again
 
     def test_history_lines(self):
-        (self.inbox / "a.png").write_bytes(png_bytes())
-        (self.inbox / "bad.png").write_bytes(b"nope")
+        self.drop("a.png")
+        self.drop("bad.png", b"nope")
         self.scan_twice()
         lines = history_lines(self.root / "watcher.jsonl", 10)
         self.assertEqual(len(lines), 2)
