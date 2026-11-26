@@ -17,15 +17,32 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 
 MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+PORT = 8420
+LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 
 app = FastAPI(title="FileForge")
+# Only answer requests addressed to this machine (blocks DNS rebinding), and refuse
+# state-changing requests that a web page on another site sent (blocks cross-site
+# uploads). Requests with no Origin header (curl, the watcher, scripts) pass.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
+
+
+@app.middleware("http")
+async def refuse_cross_site_writes(request, call_next):
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin is not None:
+        if urlparse(origin).hostname not in LOCAL_HOSTS:
+            return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
+    return await call_next(request)
 
 
 @dataclass
@@ -242,4 +259,4 @@ app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8420)
+    uvicorn.run(app, host="127.0.0.1", port=PORT)

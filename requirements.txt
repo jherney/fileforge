@@ -1,7 +1,7 @@
-fastapi
-uvicorn
-python-multipart
-pdf2docx
-PyMuPDF
-pillow
-pillow-heif
+fastapi~=0.162
+uvicorn~=0.54
+python-multipart~=0.0.34
+pdf2docx~=0.5.13
+PyMuPDF~=1.28
+pillow~=13.0
+pillow-heif~=1.9

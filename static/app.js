@@ -37,6 +37,9 @@ function setStatus(msg, cls = "") {
 
 function fillFrom() {
   fromSel.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = ""; ph.textContent = "Choose a format…"; ph.disabled = true; ph.selected = true;
+  fromSel.appendChild(ph);
   for (const ext of Object.keys(SOURCES).sort()) {
     const o = document.createElement("option");
     o.value = ext; o.textContent = ext.toUpperCase();
@@ -70,7 +73,8 @@ function setFile(f) {
   if (!f) {
     chip.classList.remove("show");
     setStatus("");
-    syncUi();
+    fromSel.value = "";
+    fillTo();
     return;
   }
   const ext = extOf(f.name);
@@ -191,7 +195,9 @@ drop.addEventListener("drop", (e) => {
 fromSel.addEventListener("change", () => {
   // switching the source must match the chosen file
   if (currentFile && extOf(currentFile.name) !== fromSel.value) {
+    const chosen = fromSel.value;
     setFile(null); fileInput.value = "";
+    fromSel.value = chosen;  // keep the format the user just picked
     setStatus("Pick a file that matches the selected format.", "");
   }
   fillTo();

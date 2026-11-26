@@ -165,7 +165,7 @@ class Content(unittest.TestCase):
 class Api(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.c = TestClient(A.app)
+        cls.c = TestClient(A.app, base_url="http://127.0.0.1:8420")
 
     def post(self, name, data, src, dst):
         return self.c.post(f"/api/convert?fmt_from={src}&fmt_to={dst}", files={"file": (name, data)})
@@ -197,6 +197,20 @@ class Api(unittest.TestCase):
     def test_oversize_is_413(self):
         with mock.patch.object(A, "MAX_BYTES", 10):
             self.assertEqual(self.post("a.png", SAMPLES["png"], "png", "jpg").status_code, 413)
+
+    def test_cross_site_origin_is_refused(self):
+        r = self.c.post("/api/convert?fmt_from=png&fmt_to=jpg", files={"file": ("a.png", SAMPLES["png"])},
+                        headers={"Origin": "https://evil.example"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_local_origin_and_no_origin_are_accepted(self):
+        for hdr in ({"Origin": "http://localhost:8420"}, {}):
+            r = self.c.post("/api/convert?fmt_from=png&fmt_to=jpg", files={"file": ("a.png", SAMPLES["png"])}, headers=hdr)
+            self.assertEqual(r.status_code, 200, hdr)
+
+    def test_foreign_host_header_is_refused(self):  # DNS-rebinding case
+        r = self.c.get("/api/formats", headers={"Host": "evil.example"})
+        self.assertEqual(r.status_code, 400)
 
     def test_corrupt_file_is_422(self):
         self.assertEqual(self.post("a.png", b"not an image", "png", "jpg").status_code, 422)
