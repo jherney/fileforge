@@ -83,12 +83,26 @@ systemctl --user daemon-reload
 systemctl --user enable --now fileforge-watcher.service
 ```
 
+## Command line
+
+Convert without the server or a browser:
+
+```bash
+python3 cli.py convert photo.heic --to jpg          # writes photo.jpg beside the original
+python3 cli.py convert a.docx b.docx --to pdf --out ~/pdfs --notify
+python3 cli.py targets report.docx                   # what can this file become?
+```
+
+Nothing is overwritten (a taken name becomes `photo-1.jpg`). Exit status: 0 all
+converted, 1 a conversion failed, 2 bad request (missing file, no way to reach the format).
+
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt        # httpx, for the API tests
 python3 -m unittest tests.test_convert     # every registered pair, content checks, HTTP API (~1 min, needs soffice)
 python3 -m unittest tests.test_watcher     # magic folder (~1 s)
+python3 -m unittest tests.test_cli         # command line (~1 s)
 ```
 
 A new `register(...)` pair is covered automatically by the matrix test once its

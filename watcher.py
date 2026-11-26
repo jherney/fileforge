@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from converters import MAX_BYTES, REGISTRY, find_route, free_name, run_chain
+from converters import REGISTRY, convert_path, save_output
 
 TARGETS = {t for (_, t) in REGISTRY}
 SKIP_SUFFIXES = {".part", ".crdownload", ".tmp", ".partial", ".download"}
@@ -122,22 +122,9 @@ class Watcher:
         self.seen = current
         return converted
 
-    @staticmethod
-    def _run_converter(p: Path, fmt: str, st):
-        """(output bytes, route). Uses a direct converter, else the shortest multi-step route."""
-        src = p.suffix.lower().lstrip(".")
-        route = find_route(src, fmt)
-        if route is None:
-            raise ValueError(f"cannot convert {src or 'this file type'} to {fmt}")
-        if st.st_size == 0:
-            raise ValueError("file is empty")
-        if st.st_size > MAX_BYTES:
-            raise ValueError("file is over the 50 MB limit")
-        return run_chain(p.read_bytes(), route), route
-
     def convert(self, p: Path, fmt: str, st) -> int:
         try:
-            data, route = self._run_converter(p, fmt, st)
+            data, route = convert_path(p, fmt)
         except Exception as exc:  # any converter failure must not stop the watcher
             failed = p.parent / "failed"
             failed.mkdir(exist_ok=True)
@@ -146,12 +133,7 @@ class Watcher:
             notify(f"Could not convert {p.name}", str(exc))
             print(f"FAILED {p.name}: {exc}", flush=True)
             return 0
-        out_dir = p.parent / "out"
-        out_dir.mkdir(exist_ok=True)
-        out = free_name(out_dir, p.stem, fmt)
-        tmp = out.with_name(f".{out.name}.tmp")
-        tmp.write_bytes(data)
-        tmp.rename(out)
+        out = save_output(p.parent / "out", p.stem, fmt, data)
         steps = [route[0][0]] + [dst for _, dst in route]  # e.g. ["docx", "pdf", "png"]
         self._log(p, st, "ok", output=str(out), **({"route": steps} if len(route) > 1 else {}))
         notify(f"Converted {p.name}", f"Saved {out.name}")

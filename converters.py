@@ -317,3 +317,29 @@ def run_chain(data: bytes, route: Route) -> bytes:
 
 def content_type_for(route: Route) -> str:
     return REGISTRY[route[-1]].content_type
+
+
+# --- Files: shared by the watcher and the command line ---------------------------
+
+def convert_path(path: Path, fmt: str) -> tuple[bytes, Route]:
+    """Convert a file on disk to fmt. Returns (output bytes, route used)."""
+    src = path.suffix.lower().lstrip(".")
+    route = find_route(src, fmt)
+    if route is None:
+        raise ValueError(f"cannot convert {src or 'this file type'} to {fmt}")
+    size = path.stat().st_size
+    if size == 0:
+        raise ValueError("file is empty")
+    if size > MAX_BYTES:
+        raise ValueError("file is over the 50 MB limit")
+    return run_chain(path.read_bytes(), route), route
+
+
+def save_output(folder: Path, stem: str, fmt: str, data: bytes) -> Path:
+    """Write folder/stem.fmt without overwriting anything (stem-1.fmt if taken)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    out = free_name(folder, stem, fmt)
+    tmp = out.with_name(f".{out.name}.tmp")
+    tmp.write_bytes(data)
+    tmp.rename(out)  # appears complete or not at all
+    return out
