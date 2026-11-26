@@ -110,6 +110,18 @@ It calls `cli.py convert ... --notify`, so results appear beside the originals w
 notification. The menu lists every format for every readable file type; a pair with no route
 ends in a "failed" notification. Re-run the installer if you move the repo.
 
+### Magic-folder watcher as a systemd user service
+
+```bash
+python3 deploy/install_watcher_service.py       # writes ~/.config/systemd/user/fileforge-watcher.service
+systemctl --user enable --now fileforge-watcher.service
+journalctl --user -u fileforge-watcher -n 20 --no-pager
+python3 deploy/install_watcher_service.py --uninstall
+```
+
+The installer fills in this checkout's path, so it works wherever you cloned the repo. It does not
+start anything itself. To run it with no login session, `loginctl enable-linger $USER` (your choice).
+
 Nothing is overwritten (a taken name becomes `photo-1.jpg`). Exit status: 0 all
 converted, 1 a conversion failed, 2 bad request (missing file, no way to reach the format).
 

@@ -45,7 +45,7 @@ def build_desktop(python: str = sys.executable, cli_path: Path = ROOT / "cli.py"
     lines = [
         "[Desktop Entry]",
         "Type=Service",
-        "ServiceTypes=KonqPopupMenu/Plugin",
+        "X-KDE-ServiceTypes=KonqPopupMenu/Plugin",
         f"MimeType={';'.join(source_mimes())};",
         f"Actions={';'.join(f'to-{t}' for t in targets)};",
         "X-KDE-Submenu=Convert to...",
