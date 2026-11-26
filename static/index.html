@@ -49,14 +49,16 @@
   .filechip { display: none; align-items: center; gap: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin-top: 14px; }
   .filechip.show { display: flex; }
   .filechip .ext { font: 800 13px var(--slab); background: var(--accent); color: var(--accent-ink); border-radius: 4px; padding: 6px 8px; text-transform: lowercase; }
+  .filechip.error { border-color: var(--err); }
+  .filechip.error .ext { background: var(--err); color: var(--accent-ink); }
   .filechip .meta { flex: 1; min-width: 0; }
   .filechip .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .filechip .size { color: var(--muted); font-size: 12.5px; }
+  .filechip .size { color: var(--muted); font-size: 13.5px; }
   .filechip .x { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; padding: 2px 8px; }
   .filechip .x:hover { color: var(--err); }
 
   .convert-row { display: grid; gap: 8px; }
-  .fmt-label { color: var(--muted); font-size: 13px; }
+  .fmt-label { color: var(--muted); font-size: 14px; }
   .fmt {
     width: 100%; background-color: var(--panel-2); border: 1px solid var(--line); color: var(--text);
     border-radius: var(--radius); padding: 11px 14px; font: 700 18px var(--slab);
@@ -64,14 +66,15 @@
     background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" stroke="%238f9a9c" stroke-width="2" fill="none" stroke-linecap="round"/></svg>');
     background-repeat: no-repeat; background-position: right 14px center;
   }
-  .arrow { color: var(--accent); font-size: 20px; line-height: 1; padding-left: 14px; }
+  .arrow { color: var(--accent); font-size: 20px; line-height: 1; }
 
   button.go { margin-top: auto; width: 100%; padding: 14px; font: 800 17px var(--slab); color: var(--accent-ink); background: var(--accent); border: none; border-radius: var(--radius); cursor: pointer; transition: filter .15s, transform .05s; }
   button.go:hover { filter: brightness(1.08); }
   button.go:active { transform: translateY(1px); }
   button.go:disabled { background: var(--panel-2); color: var(--muted); cursor: not-allowed; }
 
-  .status { min-height: 22px; font-size: 14px; }
+  .status { font-size: 14px; }
+  .status:empty { display: none; }
   .status.err { color: var(--err); }
   .status.ok { color: var(--accent); }
   .spinner { display: inline-block; width: 12px; height: 12px; margin-right: 8px; border-radius: 50%; background: var(--heat); animation: pulse .9s ease-in-out infinite alternate; vertical-align: -1px; }
@@ -108,7 +111,7 @@
       <div id="drop" role="button" tabindex="0" aria-label="Choose a file to convert, or drop one here">
         <div class="big">Drop a file here, or click to choose one</div>
         <div class="small" id="dropHint">Up to 50&nbsp;MB</div>
-        <input type="file" id="file">
+        <input type="file" id="file" aria-label="Choose a file to convert">
       </div>
       <div class="filechip" id="chip">
         <div class="ext" id="chipExt">pdf</div>

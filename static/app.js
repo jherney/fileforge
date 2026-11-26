@@ -21,6 +21,10 @@ function extOf(name) {
   return i === -1 ? "" : name.slice(i + 1).toLowerCase();
 }
 
+// .jpeg files are converted as JPG
+const srcKey = (ext) => (ext === "jpeg" ? "jpg" : ext);
+const DEFAULT_TARGETS = ["pdf", "png", "jpg"];
+
 function setStatus(msg, cls = "") {
   statusEl.textContent = "";
   if (msg) {
@@ -41,9 +45,9 @@ function fillFrom() {
   const ph = document.createElement("option");
   ph.value = ""; ph.textContent = "Choose a format…"; ph.disabled = true; ph.selected = true;
   fromSel.appendChild(ph);
-  for (const ext of Object.keys(SOURCES).sort()) {
+  for (const ext of Object.keys(SOURCES).filter((e) => e !== "jpeg").sort()) {
     const o = document.createElement("option");
-    o.value = ext; o.textContent = ext.toUpperCase();
+    o.value = ext; o.textContent = ext === "jpg" ? "JPG / JPEG" : ext.toUpperCase();
     fromSel.appendChild(o);
   }
   fillTo();
@@ -52,6 +56,9 @@ function fillFrom() {
 function fillTo() {
   const prev = toSel.value;
   toSel.innerHTML = "";
+  const ph = document.createElement("option");
+  ph.value = ""; ph.textContent = "Choose a format…"; ph.disabled = true; ph.selected = true;
+  toSel.appendChild(ph);
   const chained = document.createElement("optgroup");
   chained.label = "Converted in steps";
   for (const t of (SOURCES[fromSel.value] || [])) {
@@ -62,22 +69,23 @@ function fillTo() {
     (via ? chained : toSel).appendChild(o);
   }
   if (chained.children.length) toSel.appendChild(chained);
-  if ([...toSel.options].some((o) => o.value === prev)) toSel.value = prev;
+  // keep the earlier choice only if it is a direct target of this format
+  const direct = [...toSel.querySelectorAll(":scope > option")].map((o) => o.value).filter(Boolean);
+  if (direct.includes(prev)) toSel.value = prev;
   syncUi();
 }
 
 function syncUi() {
+  const key = currentFile ? srcKey(extOf(currentFile.name)) : "";
   const ok = !!currentFile && currentFile.size <= MAX_BYTES &&
-    !!SOURCES[extOf(currentFile.name)] &&
-    SOURCES[extOf(currentFile.name)].includes(toSel.value) &&
-    fromSel.value === extOf(currentFile.name);
+    !!SOURCES[key] && SOURCES[key].includes(toSel.value) && fromSel.value === key;
   go.disabled = !ok;
 }
 
 function setFile(f) {
   currentFile = f;
   if (!f) {
-    chip.classList.remove("show");
+    chip.classList.remove("show", "error");
     setStatus("");
     fromSel.value = "";
     fillTo();
@@ -87,15 +95,25 @@ function setFile(f) {
   chip.classList.add("show");
   $("chipExt").textContent = ext || "?";
   $("chipName").textContent = f.name;
+  $("chipName").title = f.name;
   $("chipSize").textContent = fmtSize(f.size);
 
-  if (!SOURCES[ext]) {
-    setStatus(`Unsupported file type “${ext || "?"}”. Try one of the formats below.`, "err");
-  } else if (f.size > MAX_BYTES) {
-    setStatus(`File is ${fmtSize(f.size)} — the limit is 50 MB.`, "err");
-  } else {
-    fromSel.value = ext;
+  const key = srcKey(ext);
+  chip.classList.remove("error");
+  if (!SOURCES[key] || f.size > MAX_BYTES) {
+    chip.classList.add("error");
+    fromSel.value = "";  // don't leave the previous file's formats selected
     fillTo();
+    setStatus(!SOURCES[key]
+      ? `Unsupported file type “${ext || "none"}”. Supported: ${Object.keys(SOURCES).filter((e) => e !== "jpeg").sort().map((e) => e.toUpperCase()).join(", ")}.`
+      : `File is ${fmtSize(f.size)} — the limit is 50 MB.`, "err");
+  } else {
+    fromSel.value = key;
+    fillTo();
+    if (!toSel.value) {
+      const direct = [...toSel.querySelectorAll(":scope > option")].map((o) => o.value);
+      toSel.value = DEFAULT_TARGETS.find((t) => direct.includes(t)) || "";
+    }
     setStatus("");
   }
   syncUi();
@@ -206,16 +224,16 @@ drop.addEventListener("drop", (e) => {
   }
 });
 fromSel.addEventListener("change", () => {
-  // switching the source must match the chosen file
-  if (currentFile && extOf(currentFile.name) !== fromSel.value) {
-    const chosen = fromSel.value;
-    setFile(null); fileInput.value = "";
-    fromSel.value = chosen;  // keep the format the user just picked
-    setStatus("Pick a file that matches the selected format.", "");
+  // the source must match the chosen file: keep the file, say what to do
+  const key = currentFile ? srcKey(extOf(currentFile.name)) : "";
+  if (currentFile && key !== fromSel.value) {
+    setStatus(`The file is ${key.toUpperCase() || "of unknown type"}, not ${fromSel.value.toUpperCase()}. Set “From” back to ${key.toUpperCase()}, or choose another file.`, "err");
+  } else {
+    setStatus("");
   }
   fillTo();
 });
-toSel.addEventListener("change", syncUi);
+toSel.addEventListener("change", () => { setStatus(""); syncUi(); });
 go.addEventListener("click", convert);
 
 loadFormats();

@@ -250,6 +250,8 @@ LOSSY_INTERMEDIATES = {"txt", "csv", "html", "rtf", "zip"}
 # Preferred stops, best first, to choose between routes of the same length.
 PREFERRED_INTERMEDIATES = ["pdf", "png", "docx", "jpg"]
 
+TEXT_TARGETS = {"txt", "csv", "html", "rtf"}  # whitespace-only output counts as empty
+
 Route = list[tuple[str, str]]  # [(src, dst), ...], every pair is in REGISTRY
 
 
@@ -281,7 +283,10 @@ def _best_routes_from(src: str) -> dict[str, Route]:
             walk(path + [nxt])
 
     walk([src])
-    return {dst: route for dst, (_, route) in best.items()}
+    # An image only ever becomes another image (or a PDF, directly): routes through
+    # PDF to text, HTML, DOCX... would be empty or meaningless.
+    return {dst: route for dst, (_, route) in best.items()
+            if src not in IMAGE_SOURCES or dst in IMAGE_SOURCES}
 
 
 def find_route(src: str, dst: str) -> Route | None:
@@ -312,6 +317,9 @@ def run_chain(data: bytes, route: Route) -> bytes:
             if len(route) == 1:
                 raise
             raise RuntimeError(f"{src}->{dst} failed (step {step} of {len(route)}): {exc}") from exc
+    text_like = route[-1][1] in TEXT_TARGETS
+    if not (data.strip() if text_like else data):
+        raise ValueError("the result is empty (the source has nothing to convert to this format)")
     return data
 
 

@@ -119,13 +119,19 @@ class CliTest(unittest.TestCase):
         self.assertFalse((self.dir / "bad.jpg").exists())
 
     def test_targets_lists_direct_then_chained(self):
-        code, out, _ = run("targets", self.png())
+        code, out, _ = run("targets", self.dir / "r.docx")  # only the extension matters
         lines = out.splitlines()
         self.assertEqual(code, 0)
+        self.assertIn("pdf", lines)
+        self.assertTrue(any(l.startswith("png via pdf") for l in lines))
+        self.assertLess(lines.index("pdf"), next(i for i, l in enumerate(lines) if " via " in l))
+
+    def test_images_are_offered_only_image_targets(self):
+        _, out, _ = run("targets", self.png())
+        lines = out.splitlines()
         self.assertIn("jpg", lines)
-        self.assertIn("pdf", lines)                       # direct since image->pdf exists
-        self.assertTrue(any(l.startswith("docx via pdf") for l in lines))
-        self.assertLess(lines.index("jpg"), next(i for i, l in enumerate(lines) if " via " in l))
+        self.assertIn("pdf", lines)
+        self.assertFalse(any(l.split()[0] in ("txt", "zip", "docx") for l in lines))
 
     def test_targets_for_unknown_type_is_exit_2(self):
         code, _, err = run("targets", self.dir / "thing.xyz")

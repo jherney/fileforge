@@ -208,6 +208,21 @@ class Chains(unittest.TestCase):
         self.assertFalse(set(chained) & set(C.REGISTRY))
         self.assertEqual(chained[("docx", "png")], [("docx", "pdf"), ("pdf", "png")])
 
+    def test_images_only_chain_to_images(self):
+        for (src, dst) in C.chained_pairs():
+            if src in C.IMAGE_SOURCES:
+                self.assertIn(dst, C.IMAGE_SOURCES, f"{src}->{dst}")
+        for dst in ("txt", "zip", "docx", "html"):
+            self.assertIsNone(C.find_route("png", dst))
+        self.assertEqual(C.find_route("png", "pdf"), [("png", "pdf")])  # direct stays
+
+    def test_empty_result_is_an_error_not_an_empty_file(self):
+        route = [("pdf", "txt")]
+        for empty in (b"", b" \n\n"):
+            with mock.patch.dict(C.REGISTRY, {("pdf", "txt"): C.Conversion("pdf", "txt", "text/plain", lambda d, e=empty: e)}):
+                with self.assertRaisesRegex(ValueError, "empty"):
+                    C.run_chain(b"x", route)
+
     def test_pdf_to_jpg_runs_through_png(self):
         out = C.run_chain(SAMPLES["pdf"], C.find_route("pdf", "jpg"))
         self.assertTrue(out.startswith(b"\xff\xd8"))
