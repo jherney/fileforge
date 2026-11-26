@@ -4,3 +4,4 @@ python-multipart
 pdf2docx
 PyMuPDF
 pillow
+pillow-heif

@@ -5,7 +5,7 @@ converter functions. Engines used:
   * pdf2docx  — PDF -> Word (layout preserving)
   * LibreOffice headless — document/spreadsheet/presentation matrix + PDF export
   * PyMuPDF   — PDF -> text / PNG
-  * Pillow    — raster image conversions
+  * Pillow    — raster image conversions (HEIC/HEIF read via pillow-heif)
 """
 from __future__ import annotations
 
@@ -152,12 +152,16 @@ IMAGE_SOURCES = {
     "gif": ["png", "jpg", "webp", "bmp"],
     "bmp": ["png", "jpg", "webp", "gif", "tiff"],
     "tiff": ["png", "jpg", "webp", "gif", "bmp"],
+    "heic": ["jpg", "png", "webp", "gif", "bmp", "tiff"],  # phone photos
+    "heif": ["jpg", "png", "webp", "gif", "bmp", "tiff"],
 }
 
 
 def image_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
     from PIL import Image
+    from pillow_heif import register_heif_opener
 
+    register_heif_opener()  # lets Image.open read .heic/.heif (idempotent)
     Image.MAX_IMAGE_PIXELS = 200_000_000  # decompression-bomb guard
     im = Image.open(io.BytesIO(data))
     if dst_ext == "jpg":

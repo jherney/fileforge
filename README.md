@@ -21,6 +21,7 @@ Open http://127.0.0.1:8420, drop a file in, pick a target format, convert.
 | Spreadsheets (LibreOffice) | xls, xlsx, ods, csv | pdf + each other |
 | Presentations (LibreOffice) | ppt, pptx, odp | pdf + each other |
 | Images (Pillow) | png, jpg/jpeg, webp, gif, bmp, tiff | each other |
+| Phone photos (pillow-heif) | heic, heif | jpg, png, webp, gif, bmp, tiff |
 
 PDF → Word uses [pdf2docx](https://github.com/dothinking/pdf2docx), which
 preserves layout, tables, and fonts far better than a generic converter.
@@ -74,4 +75,13 @@ systemctl --user daemon-reload
 systemctl --user enable --now fileforge-watcher.service
 ```
 
-Tests: `python3 -m unittest tests.test_watcher`.
+## Tests
+
+```bash
+pip install -r requirements-dev.txt        # httpx, for the API tests
+python3 -m unittest tests.test_convert     # every registered pair, content checks, HTTP API (~1 min, needs soffice)
+python3 -m unittest tests.test_watcher     # magic folder (~1 s)
+```
+
+A new `register(...)` pair is covered automatically by the matrix test once its
+source format has a sample in `tests/test_convert.py`.
