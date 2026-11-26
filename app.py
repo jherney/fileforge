@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -25,11 +27,14 @@ ALLOWED_ORIGINS = {f"http://{h}:{PORT}" for h in LOCAL_HOSTS}
 TOO_LARGE = f"File too large ({MAX_BYTES >> 20} MB limit)"
 CONVERSION_SLOTS = asyncio.Semaphore(2)  # each conversion can use a lot of memory or a whole LibreOffice
 
+HOSTED = bool(os.environ.get("VERCEL"))  # a public deployment, not the local tool
+
 app = FastAPI(title="FileForge")
-# Only answer requests addressed to this machine (blocks DNS rebinding), and refuse
-# state-changing requests that a web page on another site sent (blocks cross-site
+# Locally: only answer requests addressed to this machine (blocks DNS rebinding). Always:
+# refuse state-changing requests that a web page on another site sent (blocks cross-site
 # uploads). Requests with no Origin header (curl, the watcher, scripts) pass.
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
+if not HOSTED:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 
 
 @app.middleware("http")
@@ -66,7 +71,10 @@ async def add_security_headers(request, call_next):
 async def refuse_cross_site_writes(request, call_next):
     origin = request.headers.get("origin")
     if request.method not in ("GET", "HEAD", "OPTIONS") and origin is not None:
-        if origin not in ALLOWED_ORIGINS:  # another local dev server (localhost:3000) is cross-site too
+        # hosted: the page and the API share one host. Locally: exact origin, so another
+        # local dev server (localhost:3000) counts as cross-site too.
+        same_site = (urlparse(origin).netloc == request.headers.get("host")) if HOSTED else origin in ALLOWED_ORIGINS
+        if not same_site:
             return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
     return await call_next(request)
 
@@ -96,7 +104,7 @@ def formats():
     pairs = [{"from": s, "to": t} for (s, t) in sorted(REGISTRY)]
     for (s, t), route in sorted(chained_pairs().items()):
         pairs.append({"from": s, "to": t, "via": [dst for _, dst in route[:-1]]})
-    return JSONResponse({"pairs": pairs})
+    return JSONResponse({"pairs": pairs, "max_bytes": MAX_BYTES, "hosted": HOSTED})
 
 
 @app.post("/api/convert")

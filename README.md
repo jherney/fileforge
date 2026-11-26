@@ -52,6 +52,17 @@ def my_converter(data: bytes) -> bytes:
 
 The UI picks it up automatically from `/api/formats` — no frontend changes.
 
+## Hosted on Vercel (reduced build)
+
+`vercel deploy --prod` publishes the app as a serverless function (`vercel.json`, `.vercelignore`,
+`.python-version`). Vercel has no LibreOffice, so the Office/text formats are not offered: only images,
+PDF to PNG/TXT/ZIP/DOCX and image to PDF. Uploads are capped at 4 MB (Vercel's request-body limit) and
+the page says files are sent to the server. The mode is switched on by the `VERCEL` environment variable;
+the same checks apply, with a same-origin rule in place of the localhost allow-list. A new Vercel project
+has Deployment Protection on, so visitors need a Vercel login until you turn it off in the project settings.
+There is no login, quota or rate limit of its own: anyone who can reach the URL can run conversions on your account.
+Only formats that the machine can run are registered, so a local install without `soffice` behaves the same way.
+
 ## Limits
 
 - 50 MB per file (`MAX_BYTES` in `converters.py`)

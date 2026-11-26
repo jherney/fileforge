@@ -163,3 +163,22 @@ test("a direct target is kept only when the new file's format also offers it dir
   u.pick("b.jpg");   // jpg has no webp target here -> default applies
   assert.equal(u.els.toSel.value, "pdf");
 });
+
+test("the server's size limit replaces the default, in the check and in the messages", async () => {
+  const u = await load({ extra: { max_bytes: 4 * 1024 * 1024 } });
+  assert.match(u.els.dropHint.textContent, /Up to 4 MB/);
+  u.pick("big.png", 4 * 1024 * 1024 + 1);
+  assert.match(u.status(), /limit is 4 MB/);
+  assert.equal(u.els.go.disabled, true);
+  u.pick("ok.png", 4 * 1024 * 1024);
+  assert.equal(u.els.go.disabled, false);
+});
+
+test("on a hosted server the page no longer claims nothing is uploaded", async () => {
+  const local = await load();
+  local.els.tagline.textContent = "Convert documents on this machine. Nothing is uploaded.";
+  const hosted = await load({ extra: { hosted: true } });
+  assert.match(hosted.els.tagline.textContent, /sent to the server/);
+  assert.match(hosted.els.footer.textContent, /processed on the server/);
+  assert.doesNotMatch(hosted.els.footer.textContent, /never leave/);
+});

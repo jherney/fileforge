@@ -1,0 +1,9 @@
+tests/
+docs/
+deploy/
+cli.py
+watcher.py
+requirements-dev.txt
+requirements.lock
+.gstack/
+graphify-out/

@@ -254,6 +254,59 @@ class Tif(unittest.TestCase):
                          sorted(t for s, t in C.REGISTRY if s == "tiff"))
 
 
+def _run_hosted(code: str, **env) -> str:
+    """Run `code` in a fresh interpreter as if on Vercel (the mode is read at import time)."""
+    import subprocess
+    root = str(Path(__file__).resolve().parent.parent)
+    out = subprocess.run([sys.executable, "-c", f"import sys; sys.path.insert(0, {root!r}); {code}"],
+                         capture_output=True, text=True, env={**os.environ, "VERCEL": "1", **env})
+    return out.stdout.strip()
+
+
+class Hosted(unittest.TestCase):
+    """A Vercel-style deployment: any host name, same-origin check, 4 MB limit, only runnable pairs."""
+
+    def test_any_host_is_served_and_the_api_reports_limit_and_mode(self):
+        out = _run_hosted(
+            "from fastapi.testclient import TestClient; import app as A; "
+            "r = TestClient(A.app, base_url='https://fileforge.example').get('/api/formats'); "
+            "print(r.status_code, r.json()['hosted'], r.json()['max_bytes'] >> 20)")
+        self.assertEqual(out, "200 True 4")
+
+    def test_same_origin_passes_and_other_sites_do_not(self):
+        out = _run_hosted(
+            "from fastapi.testclient import TestClient; import app as A; "
+            "c = TestClient(A.app, base_url='https://fileforge.example'); "
+            "f = lambda o: c.post('/api/convert?fmt_from=png&fmt_to=jpg', files={'file': ('a.png', b'x')}, "
+            "headers={'Origin': o} if o else {}).status_code; "
+            "print([f('https://fileforge.example'), f('https://evil.example'), "
+            "f('https://fileforge.example.evil.example'), f(None)])")
+        # the refused ones are 403 before any conversion; allowed ones reach the converter (422 on junk bytes)
+        self.assertEqual(out, "[422, 403, 403, 422]")
+
+    def test_without_libreoffice_no_office_source_is_offered(self):
+        out = _run_hosted("import converters as C; print(sorted({s for s, _ in C.REGISTRY}))", PATH="/nonexistent")
+        for office in ("doc", "docx", "txt", "html", "csv", "xlsx", "pptx"):
+            self.assertNotIn(f"'{office}'", out)
+        self.assertIn("'png'", out)
+        self.assertIn("'pdf'", out)
+
+    def test_without_pdf2docx_pdf_to_docx_is_not_offered(self):
+        out = _run_hosted("import sys; sys.modules['pdf2docx'] = None; import converters as C; "
+                          "print(('pdf', 'docx') in C.REGISTRY, ('pdf', 'txt') in C.REGISTRY)")
+        self.assertEqual(out, "False True")
+
+    def test_local_mode_keeps_the_exact_origin_rule(self):
+        from fastapi.testclient import TestClient
+        import app as A
+        c = TestClient(A.app, base_url="http://127.0.0.1:8420")
+        png = enc(Image.new("RGB", (8, 8)), "PNG")
+        with mock.patch.object(A, "HOSTED", True):  # hosted rule: Origin must equal the Host header
+            r = c.post("/api/convert?fmt_from=png&fmt_to=jpg", files={"file": ("a.png", png)},
+                       headers={"Origin": "http://localhost:8420"})
+            self.assertEqual(r.status_code, 403)
+
+
 class AppSafety(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient

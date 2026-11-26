@@ -15,6 +15,7 @@ Add a format pair by registering a function:
 from __future__ import annotations
 
 import functools
+import importlib.util
 import io
 import itertools
 import math
@@ -28,7 +29,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-MAX_BYTES = 50 * 1024 * 1024  # 50 MB
+# Vercel functions refuse request bodies over about 4.5 MB, so the hosted limit is lower.
+MAX_BYTES = int(os.environ.get("FILEFORGE_MAX_MB") or (4 if os.environ.get("VERCEL") else 50)) * 1024 * 1024
 MAX_PIXELS = 100_000_000      # largest image we decode (about 400 MB as RGBA)
 MAX_RENDER_PIXELS = 50_000_000  # largest PDF page we rasterise (dpi is lowered to fit)
 MAX_PDF_PAGES = 200           # pages turned into PNGs in one zip
@@ -164,7 +166,9 @@ def run_isolated(name: str, data: bytes, timeout: float | None = None) -> bytes:
     timeout = PDF_TIMEOUT if timeout is None else timeout
     proc = subprocess.Popen(
         [sys.executable, "-c", _WORKER_CODE, str(Path(__file__).resolve().parent), name],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        # the worker must find the same packages as this process (hosts may install them off the default path)
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)})
     result = _communicate_or_kill(proc, data, timeout)
     if result is None:
         raise RuntimeError(f"the PDF conversion took longer than {timeout:g} s and was stopped")
@@ -178,12 +182,17 @@ def run_isolated(name: str, data: bytes, timeout: float | None = None) -> bytes:
     raise RuntimeError("the PDF converter crashed (out of memory or a damaged file)")
 
 
+# Only pairs this machine can actually run are registered, so the UI never offers the rest.
+HAVE_PDF2DOCX = importlib.util.find_spec("pdf2docx") is not None
+HAVE_SOFFICE = shutil.which("soffice") is not None
+
 for _name, _dst, _ct in [
         ("pdf_to_docx", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         ("pdf_to_txt", "txt", "text/plain"),
         ("pdf_to_png", "png", "image/png"),
         ("pdf_to_zip", "zip", "application/zip")]:
-    register("pdf", _dst, _ct)(functools.partial(run_isolated, _name))
+    if _name != "pdf_to_docx" or HAVE_PDF2DOCX:
+        register("pdf", _dst, _ct)(functools.partial(run_isolated, _name))
 
 
 # --- LibreOffice headless engine -------------------------------------------
@@ -201,7 +210,7 @@ def _network_isolation() -> list[str]:
     return cmd if ok else []
 
 
-NO_NETWORK = _network_isolation()
+NO_NETWORK = _network_isolation() if HAVE_SOFFICE else []
 
 
 def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
@@ -247,7 +256,7 @@ OFFICE_SOURCES = {
     "odp": ["pdf", "pptx"],
 }
 
-for _src, _targets in OFFICE_SOURCES.items():
+for _src, _targets in (OFFICE_SOURCES.items() if HAVE_SOFFICE else ()):
     for _dst in _targets:
         _ct = mimetypes.guess_type(f"x.{_dst}")[0] or "application/octet-stream"
         register(_src, _dst, _ct)(

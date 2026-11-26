@@ -41,7 +41,7 @@ class El {
 }
 
 const IDS = ["drop", "file", "chip", "go", "status", "fromSel", "toSel", "chipExt", "chipName",
-  "chipSize", "chipX", "available", "dropHint"];
+  "chipSize", "chipX", "available", "dropHint", "tagline", "footer"];
 
 const DEFAULT_PAIRS = [
   { from: "png", to: "jpg" }, { from: "png", to: "pdf" }, { from: "png", to: "webp" },
@@ -55,7 +55,7 @@ const DEFAULT_PAIRS = [
   { from: "csv", to: "xlsx" },   // no pdf/png/jpg target: no default
 ];
 
-async function load({ pairs = DEFAULT_PAIRS, fetchOk = true } = {}) {
+async function load({ pairs = DEFAULT_PAIRS, fetchOk = true, extra = {} } = {}) {
   const els = Object.fromEntries(IDS.map((id) => [id, new El(id.endsWith("Sel") ? "select" : "div")]));
   els.go.disabled = true;
   const winListeners = {};
@@ -67,7 +67,7 @@ async function load({ pairs = DEFAULT_PAIRS, fetchOk = true } = {}) {
       body: new El("body"),
     },
     window: { addEventListener: (ev, fn) => (winListeners[ev] ||= []).push(fn) },
-    fetch: async () => ({ ok: fetchOk, statusText: "err", json: async () => ({ pairs }) }),
+    fetch: async () => ({ ok: fetchOk, statusText: "err", json: async () => ({ pairs, ...extra }) }),
     FormData: class { append() {} },
     URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
     setTimeout, console,

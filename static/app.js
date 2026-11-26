@@ -8,7 +8,8 @@ let SOURCES = {};        // ext -> [targets]
 let VIA = {};            // "src>dst" -> middle formats, for pairs converted in more than one step
 let currentFile = null;
 
-const MAX_BYTES = 50 * 1024 * 1024;
+let MAX_BYTES = 50 * 1024 * 1024;  // the server reports its own limit in /api/formats
+const limitText = () => `${Math.round(MAX_BYTES / 1024 / 1024)} MB`;
 
 function fmtSize(n) {
   if (n < 1024) return n + " B";
@@ -117,7 +118,7 @@ function setFile(f) {
     fillTo();
     setStatus(!SOURCES[key]
       ? `Unsupported file type “${ext || "none"}”. Supported: ${mainSources().map((e) => e.toUpperCase()).join(", ")}.`
-      : `File is ${fmtSize(f.size)} — the limit is 50 MB.`, "err");
+      : `File is ${fmtSize(f.size)} — the limit is ${limitText()}.`, "err");
   } else {
     fromSel.value = key;
     fillTo();
@@ -146,7 +147,7 @@ function renderAvailable() {
   const note = document.createElement("p");
   note.textContent = "Where there is no direct converter, FileForge converts in steps, for example Word to PNG by way of PDF. Those targets are listed under “Converted in steps” once you pick a file.";
   el.appendChild(note);
-  $("dropHint").textContent = "Up to 50 MB. Supported formats are listed below.";
+  $("dropHint").textContent = `Up to ${limitText()}. Supported formats are listed below.`;
 }
 
 async function loadFormats() {
@@ -158,6 +159,11 @@ async function loadFormats() {
   } catch (err) {
     setStatus("Couldn’t load the format list — is the FileForge server running?", "err");
     return;
+  }
+  if (data.max_bytes) MAX_BYTES = data.max_bytes;
+  if (data.hosted) {  // the page says "nothing is uploaded" for the local tool; here it would be false
+    $("tagline").textContent = "Convert files in your browser. They are sent to the server, converted and not stored.";
+    $("footer").textContent = "Files are processed on the server and deleted right after conversion.";
   }
   PAIRS = data.pairs;
   SOURCES = {};
