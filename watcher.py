@@ -15,6 +15,7 @@ run one at a time, so two drops never collide inside LibreOffice.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import shutil
 import subprocess
@@ -37,7 +38,9 @@ def ignored(p: Path) -> bool:
 
 def notify(title: str, body: str) -> None:
     if shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-a", "FileForge", title, body], check=False)
+        # file names and converter errors are untrusted: notification daemons render markup,
+        # and "--" stops a leading "-" being read as an option
+        subprocess.run(["notify-send", "-a", "FileForge", "--", html.escape(title), html.escape(body)], check=False)
 
 
 def read_log(log_path: Path) -> list[dict]:

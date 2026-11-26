@@ -20,8 +20,10 @@ import itertools
 import math
 import mimetypes
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,8 +56,6 @@ def register(source: str, target: str, content_type: str):
 # Converters
 # --------------------------------------------------------------------------
 
-@register("pdf", "docx",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 def pdf_to_docx(data: bytes) -> bytes:
     from pdf2docx import Converter
 
@@ -71,7 +71,6 @@ def pdf_to_docx(data: bytes) -> bytes:
         return dst.read_bytes()
 
 
-@register("pdf", "txt", "text/plain")
 def pdf_to_txt(data: bytes) -> bytes:
     import pymupdf
 
@@ -91,7 +90,6 @@ def _render_page(page) -> bytes:
     return page.get_pixmap(dpi=dpi).tobytes("png")
 
 
-@register("pdf", "png", "image/png")
 def pdf_to_png(data: bytes) -> bytes:
     import pymupdf
 
@@ -102,7 +100,6 @@ def pdf_to_png(data: bytes) -> bytes:
         doc.close()
 
 
-@register("pdf", "zip", "application/zip")
 def pdf_to_zip(data: bytes) -> bytes:
     """Every page as page-001.png, page-002.png, ... (150 dpi) in one zip."""
     import zipfile
@@ -124,9 +121,75 @@ def pdf_to_zip(data: bytes) -> bytes:
         doc.close()
 
 
+# --- Worker process for PDF work ---------------------------------------------------
+# PyMuPDF and pdf2docx run untrusted PDFs in native code with no time limit of their own.
+# Each call runs in a child process that is killed on timeout (or dies alone on a crash).
+
+_WORKER_CODE = "import sys; sys.path.insert(0, sys.argv[1]); import converters; converters._worker_main(sys.argv[2])"
+_ERR_MARK = "FFERR:"
+
+
+def _worker_main(name: str) -> None:
+    """Child side: bytes on stdin -> converter `name` -> bytes on stdout."""
+    data = sys.stdin.buffer.read()
+    result_fd = os.dup(1)
+    os.dup2(2, 1)  # library chatter on stdout must not mix into the result
+    try:
+        out = globals()[name](data)
+    except Exception as exc:
+        kind = "value" if isinstance(exc, ValueError) else "other"
+        print(f"{_ERR_MARK}{kind}:{str(exc).splitlines()[0] if str(exc) else type(exc).__name__}", file=sys.stderr)
+        sys.exit(3)
+    with os.fdopen(result_fd, "wb") as f:
+        f.write(out)
+
+
+def run_isolated(name: str, data: bytes, timeout: float | None = None) -> bytes:
+    timeout = PDF_TIMEOUT if timeout is None else timeout
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _WORKER_CODE, str(Path(__file__).resolve().parent), name],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        out, err = proc.communicate(data, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise RuntimeError(f"the PDF conversion took longer than {timeout:g} s and was stopped") from None
+    if proc.returncode == 0:
+        return out
+    lines = [l for l in err.decode(errors="replace").splitlines() if l.startswith(_ERR_MARK)]
+    if lines:
+        kind, _, msg = lines[-1][len(_ERR_MARK):].partition(":")
+        raise (ValueError if kind == "value" else RuntimeError)(msg)
+    raise RuntimeError("the PDF converter crashed (out of memory or a damaged file)")
+
+
+for _name, _dst, _ct in [
+        ("pdf_to_docx", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ("pdf_to_txt", "txt", "text/plain"),
+        ("pdf_to_png", "png", "image/png"),
+        ("pdf_to_zip", "zip", "application/zip")]:
+    register("pdf", _dst, _ct)(functools.partial(run_isolated, _name))
+
+
 # --- LibreOffice headless engine -------------------------------------------
 
 LO_TIMEOUT = 180
+PDF_TIMEOUT = 120  # PyMuPDF / pdf2docx work, run in a worker process we can kill
+# LibreOffice follows links in documents (HTML stylesheets, linked images). Run it in a new
+# network namespace so a crafted file cannot make it call localhost or the LAN.
+def _network_isolation() -> list[str]:
+    cmd = ["unshare", "--map-root-user", "--net"]
+    if not shutil.which("unshare"):
+        return []
+    try:  # some systems disallow unprivileged namespaces; then run without
+        ok = subprocess.run([*cmd, "true"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    return cmd if ok else []
+
+
+NO_NETWORK = _network_isolation()
 
 
 def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
@@ -136,7 +199,7 @@ def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
         src.write_bytes(data)
         profile = Path(td) / "lo_profile"
         cmd = [
-            "soffice", "--headless", "--norestore", "--nolockcheck",
+            *NO_NETWORK, "soffice", "--headless", "--norestore", "--nolockcheck",
             f"-env:UserInstallation=file://{profile}",
             *(["--infilter=HTML (StarWriter)"] if src_ext == "html" else []),
             "--convert-to", dst_ext, "--outdir", td, str(src),

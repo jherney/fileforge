@@ -6,7 +6,7 @@ machine — files are never uploaded anywhere.
 ## Run it
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt     # or: pip install --require-hashes -r requirements.lock
 python3 app.py            # serves http://127.0.0.1:8420
 ```
 
@@ -55,7 +55,12 @@ The UI picks it up automatically from `/api/formats` — no frontend changes.
 ## Limits
 
 - 50 MB per file (`MAX_BYTES` in `converters.py`)
-- LibreOffice conversions time out after 180 s
+- Images: at most 100 megapixels. PDF pages are rasterised at 150 dpi, lower for huge pages (50 megapixels at most); PDF to zip stops at 200 pages or 50 MB
+- Every result must be under 50 MB and not empty
+- LibreOffice conversions time out after 180 s and run with no network access (`unshare`), so a document cannot make it fetch linked content. PDF conversions run in a worker process that is stopped after 120 s
+- At most 2 conversions run at once in the web app
+- Symlinks in watched folders and in folders given to the CLI are skipped
+- Uploads must send `Content-Length`; the page is served with a strict Content-Security-Policy
 - Listens on 127.0.0.1 only; it is a local tool, not a public service
 
 ## Magic folder
@@ -115,7 +120,10 @@ pip install -r requirements-dev.txt        # httpx, for the API tests
 python3 -m unittest tests.test_convert     # every registered pair, content checks, HTTP API (~1 min, needs soffice)
 python3 -m unittest tests.test_watcher     # magic folder (~1 s)
 python3 -m unittest tests.test_cli         # command line (~1 s)
+python3 -m pytest tests                    # everything, including tests/test_hardening.py (~1 min)
 ```
+
+`requirements.lock` pins every dependency with hashes (`uv pip compile requirements.txt --generate-hashes -o requirements.lock`); `uvx pip-audit -r requirements.lock --no-deps --disable-pip` checks it for known vulnerabilities.
 
 A new `register(...)` pair is covered automatically by the matrix test once its
 source format has a sample in `tests/test_convert.py`.

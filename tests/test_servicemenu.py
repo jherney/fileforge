@@ -21,7 +21,12 @@ class ServiceMenuTest(unittest.TestCase):
 
     def test_offers_every_target_and_calls_cli_with_notify(self):
         for t in {t for _, t in REGISTRY}:
-            self.assertIn(f"convert %F --to {t} --notify", self.text)
+            self.assertIn(f"convert --to {t} --notify -- %F", self.text)
+
+    def test_exec_arguments_are_quoted_per_the_spec(self):
+        self.assertEqual(sm.quote('/a b/c"d$e\\f%'), '"/a b/c\\\\"d\\\\$e\\\\\\\\f%%"')
+        text = sm.build_desktop("/usr/bin/python 3", Path("/home/me/my tools/cli.py"))
+        self.assertIn('Exec="/usr/bin/python 3" "/home/me/my tools/cli.py" convert --to pdf', text)
 
     def test_heic_is_matched(self):
         self.assertIn("image/heic", sm.source_mimes())

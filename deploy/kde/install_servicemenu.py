@@ -32,9 +32,16 @@ def source_mimes() -> list[str]:
     return sorted(mimes)
 
 
-def build_desktop() -> str:
+def quote(arg: str) -> str:
+    """One Exec argument as the Desktop Entry spec wants it: double-quoted, with the
+    reserved characters backslash-escaped, then the file's own string escaping on top."""
+    arg = "".join("\\" + c if c in '"`$\\' else c for c in arg)
+    return '"' + arg.replace("\\", "\\\\").replace("%", "%%") + '"'
+
+
+def build_desktop(python: str = sys.executable, cli_path: Path = ROOT / "cli.py") -> str:
     targets = sorted({t for _, t in REGISTRY} | {t for _, t in chained_pairs()})
-    cli = f"{sys.executable} {ROOT / 'cli.py'}"
+    cli = f"{quote(python)} {quote(str(cli_path))}"
     lines = [
         "[Desktop Entry]",
         "Type=Service",
@@ -50,7 +57,7 @@ def build_desktop() -> str:
             f"[Desktop Action to-{t}]",
             f"Name={t.upper()}",
             "Icon=document-export",
-            f"Exec={cli} convert %F --to {t} --notify",
+            f"Exec={cli} convert --to {t} --notify -- %F",
             "",
         ]
     return "\n".join(lines)

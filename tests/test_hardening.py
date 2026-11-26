@@ -178,5 +178,105 @@ class AppHardening(unittest.TestCase):
             self.assertEqual(self.post(h).status_code, 200, h)
 
 
+class PdfWorker(unittest.TestCase):
+    def pdf(self) -> bytes:
+        doc = pymupdf.open()
+        doc.new_page()
+        return doc.tobytes()
+
+    def test_runs_in_a_child_process_and_returns_bytes(self):
+        self.assertTrue(C.REGISTRY[("pdf", "png")].run(self.pdf()).startswith(b"\x89PNG"))
+
+    def test_timeout_stops_the_worker(self):
+        with self.assertRaisesRegex(RuntimeError, "took longer"):
+            C.run_isolated("pdf_to_zip", self.pdf(), timeout=0.01)
+
+    def test_a_clean_error_keeps_its_type_and_message(self):
+        with self.assertRaises(RuntimeError):
+            C.REGISTRY[("pdf", "txt")].run(b"not a pdf")
+
+    def test_worker_crash_is_reported_not_raised_raw(self):
+        with mock.patch.object(C, "_WORKER_CODE", "import os; os._exit(9)"):
+            with self.assertRaisesRegex(RuntimeError, "crashed"):
+                C.run_isolated("pdf_to_txt", self.pdf())
+
+
+@unittest.skipUnless(C.NO_NETWORK, "network isolation (unshare) is not available here")
+class LibreOfficeNetwork(unittest.TestCase):
+    def test_linked_stylesheet_is_not_fetched(self):
+        import http.server
+        import threading
+        hits = []
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                hits.append(self.path)
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        html = f'<html><body><p>hi</p><link rel=stylesheet href="http://127.0.0.1:{srv.server_port}/x.css"></body></html>'
+        try:
+            self.assertTrue(C.soffice_convert(html.encode(), "html", "pdf").startswith(b"%PDF"))
+        finally:
+            srv.shutdown()
+        self.assertEqual(hits, [])
+
+
+class Notifications(unittest.TestCase):
+    def test_markup_is_escaped_and_options_are_terminated(self):
+        real = importlib_notify()
+        with mock.patch("shutil.which", return_value="/usr/bin/notify-send"), \
+                mock.patch("subprocess.run") as run:
+            real("<b>x</b>", "-bad <a href=x>y</a>")
+        args = run.call_args.args[0]
+        self.assertEqual(args[:4], ["notify-send", "-a", "FileForge", "--"])
+        self.assertEqual(args[4:], ["&lt;b&gt;x&lt;/b&gt;", "-bad &lt;a href=x&gt;y&lt;/a&gt;"])
+
+
+def importlib_notify():
+    import importlib
+    real = importlib.reload(watcher).notify  # the module-level stub is gone after reload
+    watcher.notify = lambda *a, **k: None    # keep the rest of the suite quiet
+    return real
+
+
+class AppSafety(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import app as A
+        self.A = A
+        self.c = TestClient(A.app, base_url="http://127.0.0.1:8420")
+
+    def test_chunked_upload_without_content_length_is_refused(self):
+        def body():
+            yield b"x" * 10
+        r = self.c.post("/api/convert?fmt_from=png&fmt_to=jpg", content=body(),
+                        headers={"Content-Type": "multipart/form-data; boundary=b"})
+        self.assertEqual(r.status_code, 411)
+
+    def test_security_headers_on_the_page_and_the_api(self):
+        for path in ("/", "/api/formats"):
+            h = self.c.get(path).headers
+            self.assertIn("default-src 'self'", h["content-security-policy"])
+            self.assertEqual(h["x-content-type-options"], "nosniff")
+            self.assertEqual(h["referrer-policy"], "no-referrer")
+
+    def test_page_has_no_inline_script_the_csp_would_block(self):
+        import re
+        html = self.c.get("/").text
+        self.assertFalse(re.search(r"<script(?![^>]*\bsrc=)", html))
+        self.assertNotRegex(html, r"\son\w+=")
+
+    def test_error_text_hides_server_paths_and_is_short(self):
+        msg = self.A._public_message(RuntimeError("failed at /tmp/tmpab12/input.html and file:///tmp/x/lo_profile " + "z" * 500))
+        self.assertNotIn("/tmp", msg)
+        self.assertLessEqual(len(msg), 301)
+
+
 if __name__ == "__main__":
     unittest.main()

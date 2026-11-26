@@ -6,6 +6,7 @@ converters themselves live in converters.py.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from converters import MAX_BYTES, REGISTRY, chained_pairs, content_type_for, find_route, run_chain
 
+log = logging.getLogger("fileforge")
 PORT = 8420
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 ALLOWED_ORIGINS = {f"http://{h}:{PORT}" for h in LOCAL_HOSTS}
@@ -31,11 +33,32 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 
 @app.middleware("http")
 async def refuse_oversize_early(request, call_next):
-    # Stop a huge upload from its Content-Length header, before the body is parsed.
-    declared = request.headers.get("content-length", "")
-    if request.method == "POST" and declared.isdigit() and int(declared) > MAX_BYTES + 1024 * 1024:
-        return JSONResponse({"detail": "File too large (50 MB limit)"}, status_code=413)
+    # Stop a huge upload from its Content-Length header, before the body is parsed. A POST
+    # without one (chunked) would be spooled to disk in full first, so it is refused.
+    if request.method == "POST":
+        declared = request.headers.get("content-length", "")
+        if not declared.isdigit():
+            return JSONResponse({"detail": "Content-Length is required"}, status_code=411)
+        if int(declared) > MAX_BYTES + 1024 * 1024:
+            return JSONResponse({"detail": "File too large (50 MB limit)"}, status_code=413)
     return await call_next(request)
+
+
+# The UI is one page with inline CSS, its own script, and a data: arrow icon. Nothing else.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                               "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    return response
 
 
 @app.middleware("http")
@@ -52,6 +75,15 @@ async def refuse_cross_site_writes(request, call_next):
 # --------------------------------------------------------------------------
 
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._ -]+")
+
+
+TEMP_PATH = re.compile(r"(?:file://)?/(?:tmp|var|home|run)/\S*")
+
+
+def _public_message(exc: Exception) -> str:
+    """The error text without server paths, and short: converter stderr can be long."""
+    msg = TEMP_PATH.sub("<path>", str(exc)).strip() or "unknown error"
+    return msg if len(msg) <= 300 else msg[:300] + "…"
 
 
 def _safe_stem(filename: str) -> str:
@@ -85,7 +117,8 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
         async with CONVERSION_SLOTS:
             out = await run_in_threadpool(run_chain, data, route)
     except Exception as exc:  # converter failure -> 422 with a readable message
-        raise HTTPException(422, f"Conversion failed: {exc}") from exc
+        log.warning("conversion %s -> %s failed: %s", *key, exc)
+        raise HTTPException(422, f"Conversion failed: {_public_message(exc)}") from exc
 
     name = f"{_safe_stem(file.filename)}.{key[1]}"
     return _download(out, name, content_type_for(route))
