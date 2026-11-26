@@ -53,3 +53,25 @@ The UI picks it up automatically from `/api/formats` — no frontend changes.
 - 50 MB per file (`MAX_BYTES` in `app.py`)
 - LibreOffice conversions time out after 180 s
 - Listens on 127.0.0.1 only; it is a local tool, not a public service
+
+## Magic folder
+
+`watcher.py` converts files without the browser. Drop a file into
+`~/Convert/to-<format>/` (for example `to-pdf/`) and the result appears in that
+folder's `out/` subfolder. Originals are never touched; failures write
+`failed/<name>.err`. Any `to-<format>` folder you create is picked up.
+
+```bash
+python3 watcher.py            # run it by hand
+```
+
+To start it on login (assumes the repo is at `~/fileforge`):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/fileforge-watcher.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now fileforge-watcher.service
+```
+
+Tests: `python3 -m unittest tests.test_watcher`.

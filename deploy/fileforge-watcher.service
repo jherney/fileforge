@@ -1,0 +1,11 @@
+[Unit]
+Description=FileForge magic folder watcher
+
+[Service]
+WorkingDirectory=%h/fileforge
+ExecStart=/usr/bin/python3 %h/fileforge/watcher.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
