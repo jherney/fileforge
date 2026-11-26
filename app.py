@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -103,6 +104,7 @@ def soffice_convert(data: bytes, src_ext: str, dst_ext: str) -> bytes:
         cmd = [
             "soffice", "--headless", "--norestore", "--nolockcheck",
             f"-env:UserInstallation=file://{profile}",
+            *(["--infilter=HTML (StarWriter)"] if src_ext == "html" else []),
             "--convert-to", dst_ext, "--outdir", td, str(src),
         ]
         try:
@@ -209,7 +211,7 @@ async def convert(file: UploadFile, fmt_from: str = "pdf", fmt_to: str = "docx")
         raise HTTPException(413, "File too large (50 MB limit)")
 
     try:
-        out = conv.run(data)
+        out = await run_in_threadpool(conv.run, data)
     except HTTPException:
         raise
     except Exception as exc:  # converter failure -> 422 with a readable message
