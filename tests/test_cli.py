@@ -65,6 +65,29 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(sorted(p.name for p in dest.iterdir()), ["a.jpg", "b.jpg"])
 
+    def test_folder_converts_only_what_can_become_the_format(self):
+        self.png("a.png"); self.png("b.png"); self.png(".hidden.png")
+        (self.dir / "notes.xyz").write_text("x")
+        sub = self.dir / "sub"; sub.mkdir()
+        (sub / "c.png").write_bytes(png_bytes())
+        code, _, err = run("convert", self.dir, "--to", "jpg")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(sorted(p.name for p in self.dir.glob("*.jpg")), ["a.jpg", "b.jpg"])
+        self.assertFalse((sub / "c.jpg").exists())
+
+    def test_recursive_folder_reaches_subfolders(self):
+        sub = self.dir / "sub"; sub.mkdir()
+        (sub / "c.png").write_bytes(png_bytes())
+        code, _, _ = run("convert", self.dir, "--to", "jpg", "-r")
+        self.assertEqual(code, 0)
+        self.assertTrue((sub / "c.jpg").exists())
+
+    def test_folder_with_nothing_convertible_is_exit_2(self):
+        (self.dir / "notes.xyz").write_text("x")
+        code, _, err = run("convert", self.dir, "--to", "jpg")
+        self.assertEqual(code, 2)
+        self.assertIn("no files that can become jpg", err)
+
     def test_chained_conversion(self):
         doc = pymupdf.open()
         doc.new_page().insert_text((72, 72), "hello")

@@ -90,6 +90,7 @@ Convert without the server or a browser:
 ```bash
 python3 cli.py convert photo.heic --to jpg          # writes photo.jpg beside the original
 python3 cli.py convert a.docx b.docx --to pdf --out ~/pdfs --notify
+python3 cli.py convert ~/Scans --to pdf -r            # every convertible file in a folder (-r: subfolders too)
 python3 cli.py targets report.docx                   # what can this file become?
 ```
 
