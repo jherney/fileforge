@@ -139,3 +139,7 @@ python3 -m pytest tests                    # everything, including tests/test_ha
 
 A new `register(...)` pair is covered automatically by the matrix test once its
 source format has a sample in `tests/test_convert.py`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
